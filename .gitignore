@@ -1,2 +1,6 @@
-src/bnfc/*.hs
+src/bnfc/*
+!src/bnfc/Latte.cf
+!src/bnfc/Makefile
 *~
+*.swp
+.stack-work/

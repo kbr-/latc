@@ -19,6 +19,9 @@ data Symbols = Symbols
 
 type ErrT = String
 
+runZE :: Symbols -> ZE (AT.Expr, AT.Type) -> Either ErrT (AT.Expr, AT.Type)
+runZE sym = runIdentity . flip runReaderT sym . runExceptT
+
 getVar :: AT.Ident -> ZE (AT.VarId, AT.Type)
 getVar str =
     reader (M.lookup str . vars) >>= \case
