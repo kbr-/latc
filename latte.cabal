@@ -17,7 +17,9 @@ library
                        ErrM,
                        Annotated,
                        Semantic.Expr,
-                       Semantic.Stmt
+                       Semantic.Stmt,
+                       Semantic.Program,
+                       Semantic.ErrorT
   build-depends:       base >= 4.7 && < 5,
                        containers, array, mtl, transformers
   hs-source-dirs:      src, src/bnfc

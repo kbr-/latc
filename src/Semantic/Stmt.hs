@@ -6,6 +6,7 @@ import qualified Annotated as AT
 import qualified AbsLatte as T
 import qualified Semantic.Expr as SE
 import qualified Data.Map as M
+import Semantic.ErrorT
 import Data.Functor.Identity
 import Data.Maybe
 import Control.Monad
@@ -13,21 +14,26 @@ import Control.Monad.Except
 import Control.Monad.State.Strict
 import Control.Monad.Trans.Maybe
 
-type ZS = StateT Env Identity
+type Err = String
+
+type ZS = ErrorT Err (State Env)
 
 data Env = Env
     { funs :: M.Map String AT.FunType
     , scopeStack :: [Scope]
     , nextVarId :: Int
-    , errors :: [ErrT]
     , funRetType :: AT.Type
+    , locals :: M.Map AT.VarId AT.VarInfo
     }
 
 data Scope = Scope
     { vars :: M.Map AT.Ident (AT.VarId, AT.Type)
     }
 
-type ErrT = String
+runStmts :: Env -> [T.Stmt] -> Either [Err] ([AT.Stmt], M.Map AT.VarId AT.VarInfo)
+runStmts env ss = case flip runState env . runErrorT . runAll . map stmt $ ss of
+    (Left errs, _)     -> throwError errs
+    (Right x, Env{..}) -> pure (x, locals)
 
 pushScope :: ZS ()
 pushScope = modify $ \e@Env{..} ->
@@ -37,7 +43,7 @@ popScope :: ZS ()
 popScope = modify $ \e@Env{..} ->
     e { scopeStack = tail scopeStack }
 
-newVar :: AT.Type -> AT.Ident -> MaybeT ZS AT.VarId
+newVar :: AT.Type -> AT.Ident -> ZS AT.VarId
 newVar typ ident = do
     declared <- localDeclared ident . scopeStack <$> get
     when declared . reportError $ alreadyDeclared ident
@@ -46,41 +52,26 @@ newVar typ ident = do
     modify $ \e@Env{..} ->
         e { nextVarId = varId + 1
           , scopeStack = currentScope { vars = (M.insert ident (varId, typ) (vars currentScope)) } : tail scopeStack
+          , locals = M.insert varId (AT.VarInfo ident typ) locals
           }
     pure varId
   where
     localDeclared :: String -> [Scope] -> Bool
-    localDeclared str [s] = isJust . M.lookup ident $ vars s
-    localDeclared str (s:s':_) = isJust (M.lookup ident (vars s)) && isNothing (M.lookup ident (vars s'))
+    localDeclared str [s] = M.member str $ vars s
+    localDeclared str (s:s':_) = M.member str (vars s) && (M.notMember str (vars s'))
 
-getVar :: String -> MaybeT ZS (AT.VarId, AT.Type)
+getVar :: String -> ZS (AT.VarId, AT.Type)
 getVar str = vars . head . scopeStack <$> get >>= \vs ->
     case M.lookup str vs of
-        Just x -> pure x
+        Just x  -> pure x
         Nothing -> reportError $ undefinedVariable str
 
 getRetType :: ZS AT.Type
 getRetType = funRetType <$> get
 
-runExpr :: T.Expr -> MaybeT ZS (AT.Expr, AT.Type)
-runExpr = MaybeT . runExpr'
-
-runExpr' :: T.Expr -> ZS (Maybe (AT.Expr, AT.Type))
-runExpr' e = get >>= \env@Env{..} ->
-    case SE.runZE SE.Symbols { vars = vars (head scopeStack), funs = funs } (SE.expr e) of
-        Left err -> put env { errors = err : errors } *> pure Nothing
-        Right ae -> pure $ Just ae
-
-liftMaybe :: Maybe a -> MaybeT ZS a
-liftMaybe = MaybeT . pure
-
-try :: MaybeT ZS AT.Stmt -> ZS AT.Stmt
-try m = runMaybeT m >>= \z -> pure $ case z of
-    Nothing   -> AT.Empty
-    Just stmt -> stmt
-
-reportError :: ErrT -> MaybeT ZS a
-reportError err = modify (\env -> env { errors = err : errors env }) *> fail err
+runExpr :: T.Expr -> ZS (AT.Expr, AT.Type)
+runExpr e = get >>= \Env{..} ->
+    fromError . SE.runZE SE.Symbols { vars = vars (head scopeStack), funs = funs } $ SE.expr e
 
 stmt :: T.Stmt -> ZS AT.Stmt
 
@@ -89,16 +80,16 @@ stmt T.Empty =
 
 stmt (T.BStmt (T.Block stmts)) = do
     pushScope
-    astmts <- mapM stmt stmts
+    astmts <- runAll . map stmt $ stmts
     popScope
     pure $ AT.BStmt astmts
 
-stmt (T.Decl typ items) = try $ do
+stmt (T.Decl typ items) = do
     typ <- annType typ
-    aitems <- MaybeT (sequence <$> mapM (runMaybeT . item typ) items)
-    pure (AT.Decl typ aitems)
+    items <- runAll . map (item typ) $ items
+    pure (AT.Decl typ items)
   where
-    item :: AT.Type -> T.Item -> MaybeT ZS AT.Item
+    item :: AT.Type -> T.Item -> ZS AT.Item
     item typ (T.NoInit (T.Ident ident)) = do
         varId <- newVar typ ident
         pure $ AT.NoInit (AT.LVal varId)
@@ -108,26 +99,26 @@ stmt (T.Decl typ items) = try $ do
         varId <- newVar typ ident
         pure $ AT.Init (AT.LVal varId) ae
 
-    annType :: T.Type -> MaybeT ZS AT.Type
+    annType :: T.Type -> ZS AT.Type
     annType T.Int = pure AT.Int
     annType T.Str = pure AT.Str
     annType T.Bool = pure AT.Bool
     annType typ = reportError $ incorrectVarType typ
 
-stmt (T.Ass (T.Ident ident) e) = try $ do
+stmt (T.Ass (T.Ident ident) e) = do
     (ae, t) <- runExpr e
     (varId, typ) <- getVar ident
     unless (t == typ) . reportError $ typeMismatch t typ
     pure $ AT.Ass (AT.LVal varId) ae
 
-stmt (T.Ret e) = try $ do
+stmt (T.Ret e) = do
     (ae, t) <- runExpr e
-    typ <- lift getRetType
+    typ <- getRetType
     unless (t == typ) . reportError $ typeMismatch t typ
     pure $ AT.Ret ae
 
-stmt T.VRet = try $ do
-    typ <- lift getRetType
+stmt T.VRet = do
+    typ <- getRetType
     unless (typ == AT.Void) . reportError $ mustReturnValue typ
     pure AT.VRet
 
@@ -140,31 +131,28 @@ stmt (T.CondElse e s1 s2) =
 stmt (T.While e s) =
     condStmt e $ (\as ae -> AT.While ae as) <$> stmt s
 
-stmt (T.SExp e) = try $ AT.SExp . fst <$> runExpr e
+stmt (T.SExp e) = AT.SExp . fst <$> runExpr e
 
 condStmt :: T.Expr -> ZS (AT.Expr -> AT.Stmt) -> ZS AT.Stmt
 condStmt e mf = do
-    mae <- runExpr' e
-    f <- mf
-    try $ do
-        (ae, t) <- liftMaybe mae
-        unless (t == AT.Bool) . reportError $ condExprNotBool t
-        pure $ f ae
+    ((ae, t), f) <- run2 (runExpr e) mf
+    unless (t == AT.Bool) . reportError $ condExprNotBool t
+    pure $ f ae
 
-incorrectVarType :: T.Type -> ErrT
+incorrectVarType :: T.Type -> Err
 incorrectVarType = undefined
 
-alreadyDeclared :: AT.Ident -> ErrT
+alreadyDeclared :: AT.Ident -> Err
 alreadyDeclared = undefined
 
-typeMismatch :: AT.Type -> AT.Type -> ErrT
+typeMismatch :: AT.Type -> AT.Type -> Err
 typeMismatch = undefined
 
-mustReturnValue :: AT.Type -> ErrT
+mustReturnValue :: AT.Type -> Err
 mustReturnValue = undefined
 
-condExprNotBool :: AT.Type -> ErrT
+condExprNotBool :: AT.Type -> Err
 condExprNotBool = undefined
 
-undefinedVariable :: AT.Ident -> errT
+undefinedVariable :: AT.Ident -> Err
 undefinedVariable = undefined

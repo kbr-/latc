@@ -4,21 +4,21 @@ import qualified Data.Map as M
 
 type Ident = String
 
-data Program = Program [TopDef]
+type Program = [TopDef]
 
-data TopDef = FnDef
-    { retType :: Type
+data TopDef = FunDef
+    { funType :: FunType
     , funIdent :: Ident
-    , args :: [Arg]
-    , body :: Block
+    , args :: M.Map VarId ArgInfo
     , locals :: M.Map VarId VarInfo
+    , body :: Block
     }
-
-data Arg = Arg Type Ident
 
 type VarId = Int
 
 data VarInfo = VarInfo Ident Type
+
+data ArgInfo = ArgInfo Int VarInfo
 
 type Block = [Stmt]
 
