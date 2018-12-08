@@ -1,7 +1,7 @@
 all: ParLatte.hs LexLatte.hs AbsLatte.hs ErrM.hs
 
 ParLatte.y LexLatte.x AbsLatte.hs ErrM.hs: Latte.cf
-	bnfc $<
+	bnfc --functor $<
 
 ParLatte.hs: ParLatte.y
 	happy -gca $<

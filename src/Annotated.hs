@@ -39,7 +39,7 @@ data Stmt
 data Item = NoInit LVal | Init LVal Expr
 
 data Type = Int | Str | Bool | Void
-    deriving Eq
+    deriving (Eq, Show)
 
 data FunType = FunType Type [Type]
 

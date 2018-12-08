@@ -6,15 +6,15 @@ import qualified Annotated as AT
 import qualified AbsLatte as T
 import qualified Semantic.Expr as SE
 import qualified Data.Map as M
+import Semantic.Common
 import Semantic.ErrorT
 import Data.Functor.Identity
 import Data.Maybe
+import Data.Monoid
 import Control.Monad
 import Control.Monad.Except
 import Control.Monad.State.Strict
 import Control.Monad.Trans.Maybe
-
-type Err = String
 
 type ZS = ErrorT Err (State Env)
 
@@ -30,7 +30,7 @@ data Scope = Scope
     { vars :: M.Map AT.Ident (AT.VarId, AT.Type)
     }
 
-runStmts :: Env -> [T.Stmt] -> Either [Err] ([AT.Stmt], M.Map AT.VarId AT.VarInfo)
+runStmts :: Env -> [T.Stmt Pos] -> Either [Err] ([AT.Stmt], M.Map AT.VarId AT.VarInfo)
 runStmts env ss = case flip runState env . runErrorT . runAll . map stmt $ ss of
     (Left errs, _)     -> throwError errs
     (Right x, Env{..}) -> pure (x, locals)
@@ -43,10 +43,10 @@ popScope :: ZS ()
 popScope = modify $ \e@Env{..} ->
     e { scopeStack = tail scopeStack }
 
-newVar :: AT.Type -> AT.Ident -> ZS AT.VarId
-newVar typ ident = do
+newVar :: Pos -> AT.Type -> AT.Ident -> ZS AT.VarId
+newVar pos typ ident = do
     declared <- localDeclared ident . scopeStack <$> get
-    when declared . reportError $ alreadyDeclared ident
+    when declared . reportErrorWithPos pos $ alreadyDeclared ident
     varId <- nextVarId <$> get
     currentScope <- head . scopeStack <$> get
     modify $ \e@Env{..} ->
@@ -60,99 +60,114 @@ newVar typ ident = do
     localDeclared str [s] = M.member str $ vars s
     localDeclared str (s:s':_) = M.member str (vars s) && (M.notMember str (vars s'))
 
-getVar :: String -> ZS (AT.VarId, AT.Type)
-getVar str = vars . head . scopeStack <$> get >>= \vs ->
+getVar :: Pos -> String -> ZS (AT.VarId, AT.Type)
+getVar pos str = vars . head . scopeStack <$> get >>= \vs ->
     case M.lookup str vs of
         Just x  -> pure x
-        Nothing -> reportError $ undefinedVariable str
+        Nothing -> reportErrorWithPos pos $ undeclaredVariable str
 
 getRetType :: ZS AT.Type
 getRetType = funRetType <$> get
 
-runExpr :: T.Expr -> ZS (AT.Expr, AT.Type)
+runExpr :: T.Expr Pos -> ZS (AT.Expr, AT.Type)
 runExpr e = get >>= \Env{..} ->
     fromError . SE.runZE SE.Symbols { vars = vars (head scopeStack), funs = funs } $ SE.expr e
 
-stmt :: T.Stmt -> ZS AT.Stmt
+stmt :: T.Stmt Pos -> ZS AT.Stmt
 
-stmt T.Empty =
+stmt (T.Empty _) =
     pure AT.Empty
 
-stmt (T.BStmt (T.Block stmts)) = do
+stmt (T.BStmt _ (T.Block _ stmts)) = do
     pushScope
     astmts <- runAll . map stmt $ stmts
     popScope
     pure $ AT.BStmt astmts
 
-stmt (T.Decl typ items) = do
+stmt (T.Decl _ typ items) = do
     typ <- annType typ
     items <- runAll . map (item typ) $ items
     pure (AT.Decl typ items)
   where
-    item :: AT.Type -> T.Item -> ZS AT.Item
-    item typ (T.NoInit (T.Ident ident)) = do
-        varId <- newVar typ ident
+    item :: AT.Type -> T.Item Pos -> ZS AT.Item
+    item typ (T.NoInit pos (T.Ident ident)) = do
+        varId <- newVar pos typ ident
         pure $ AT.NoInit (AT.LVal varId)
-    item typ (T.Init (T.Ident ident) e) = do
+    item typ (T.Init pos (T.Ident ident) e) = do
         (ae, t) <- runExpr e
-        unless (t == typ) . reportError $ typeMismatch t typ
-        varId <- newVar typ ident
+        unless (t == typ) . reportErrorWithPos pos $ varTypeMismatch t typ
+        varId <- newVar pos typ ident
         pure $ AT.Init (AT.LVal varId) ae
 
-    annType :: T.Type -> ZS AT.Type
-    annType T.Int = pure AT.Int
-    annType T.Str = pure AT.Str
-    annType T.Bool = pure AT.Bool
-    annType typ = reportError $ incorrectVarType typ
-
-stmt (T.Ass (T.Ident ident) e) = do
+stmt (T.Ass pos (T.Ident ident) e) = do
     (ae, t) <- runExpr e
-    (varId, typ) <- getVar ident
-    unless (t == typ) . reportError $ typeMismatch t typ
+    (varId, typ) <- getVar pos ident
+    unless (t == typ) . reportErrorWithPos pos $ varTypeMismatch t typ
     pure $ AT.Ass (AT.LVal varId) ae
 
-stmt (T.Ret e) = do
+stmt (T.Incr pos (T.Ident ident)) = do
+    (varId, typ) <- getVar pos ident
+    unless (typ == AT.Int) . reportErrorWithPos pos $ cannotIncr typ
+    pure $ AT.Incr (AT.LVal varId)
+
+stmt (T.Decr pos (T.Ident ident)) = do
+    (varId, typ) <- getVar pos ident
+    unless (typ == AT.Int) . reportErrorWithPos pos $ cannotDecr typ
+    pure $ AT.Decr (AT.LVal varId)
+
+stmt (T.Ret pos e) = do
     (ae, t) <- runExpr e
     typ <- getRetType
-    unless (t == typ) . reportError $ typeMismatch t typ
+    unless (t == typ) . reportErrorWithPos pos $ retTypeMismatch t typ
     pure $ AT.Ret ae
 
-stmt T.VRet = do
+stmt (T.VRet pos) = do
     typ <- getRetType
-    unless (typ == AT.Void) . reportError $ mustReturnValue typ
+    unless (typ == AT.Void) . reportErrorWithPos pos $ mustReturnValue typ
     pure AT.VRet
 
-stmt (T.Cond e s) =
-    condStmt e $ (\as ae -> AT.Cond ae as) <$> stmt s
+stmt (T.Cond pos e s) =
+    condStmt pos e $ (\as ae -> AT.Cond ae as) <$> stmt s
 
-stmt (T.CondElse e s1 s2) =
-    condStmt e $ (\as1 as2 ae -> AT.CondElse ae as1 as2) <$> stmt s1 <*> stmt s2
+stmt (T.CondElse pos e s1 s2) =
+    condStmt pos e $ (\as1 as2 ae -> AT.CondElse ae as1 as2) <$> stmt s1 <*> stmt s2
 
-stmt (T.While e s) =
-    condStmt e $ (\as ae -> AT.While ae as) <$> stmt s
+stmt (T.While pos e s) =
+    condStmt pos e $ (\as ae -> AT.While ae as) <$> stmt s
 
-stmt (T.SExp e) = AT.SExp . fst <$> runExpr e
+stmt (T.SExp _ e) = AT.SExp . fst <$> runExpr e
 
-condStmt :: T.Expr -> ZS (AT.Expr -> AT.Stmt) -> ZS AT.Stmt
-condStmt e mf = do
+condStmt :: Pos -> T.Expr Pos -> ZS (AT.Expr -> AT.Stmt) -> ZS AT.Stmt
+condStmt pos e mf = do
     ((ae, t), f) <- run2 (runExpr e) mf
-    unless (t == AT.Bool) . reportError $ condExprNotBool t
+    unless (t == AT.Bool) . reportErrorWithPos pos $ condExprNotBool t
     pure $ f ae
 
-incorrectVarType :: T.Type -> Err
-incorrectVarType = undefined
-
 alreadyDeclared :: AT.Ident -> Err
-alreadyDeclared = undefined
+alreadyDeclared ident =
+    "Variable \"" <> ident <> "\" already declared"
 
-typeMismatch :: AT.Type -> AT.Type -> Err
-typeMismatch = undefined
+cannotIncr :: AT.Type -> Err
+cannotIncr t =
+    "Cannot increment variable of type " <> show t
+
+cannotDecr :: AT.Type -> Err
+cannotDecr t =
+    "Cannot decrement variable of type " <> show t
+
+varTypeMismatch :: AT.Type -> AT.Type -> Err
+varTypeMismatch exprTyp varTyp =
+    "Type " <> show varTyp <> " of variable doesn't match type " <> show exprTyp <> " of expression"
+
+retTypeMismatch :: AT.Type -> AT.Type -> Err
+retTypeMismatch exprTyp retTyp =
+    "Type " <> show retTyp <> " returned from function doesn't match\
+    \ type " <> show exprTyp <> " of expression"
 
 mustReturnValue :: AT.Type -> Err
-mustReturnValue = undefined
+mustReturnValue t =
+    "Invalid void return: function has return type " <> show t <> ""
 
 condExprNotBool :: AT.Type -> Err
-condExprNotBool = undefined
-
-undefinedVariable :: AT.Ident -> Err
-undefinedVariable = undefined
+condExprNotBool t =
+    "Type of conditional expression must be " <> show AT.Bool <> ", not " <> show t

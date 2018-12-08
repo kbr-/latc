@@ -16,6 +16,7 @@ library
                        LexLatte,
                        ErrM,
                        Annotated,
+                       Semantic.Common,
                        Semantic.Expr,
                        Semantic.Stmt,
                        Semantic.Program,
