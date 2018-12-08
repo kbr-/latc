@@ -81,10 +81,10 @@ expr (T.ERel pos e1 (annRelOp -> op) e2) = do
     (ae1, t1) <- expr e1
     (ae2, t2) <- expr e2
     case (t1, t2) of
-        (AT.Int, AT.Int)             -> pure (AT.ERel ae1 op ae2, AT.Bool)
-        _ | t1 == t2 && op == AT.EQU -> pure (AT.ERel ae1 op ae2, AT.Bool)
-        _ | t1 == t2                 -> errorWithPos pos $ cannotCompareIneq t1
-        _                            -> errorWithPos pos $ cannotCompare t1 t2
+        (AT.Int, AT.Int)                          -> pure (AT.ERel ae1 op ae2, AT.Bool)
+        _ | t1 == t2 && op `elem` [AT.EQU, AT.NE] -> pure (AT.ERel ae1 op ae2, AT.Bool)
+        _ | t1 == t2                              -> errorWithPos pos $ cannotCompareOrd t1
+        _                                         -> errorWithPos pos $ cannotCompare t1 t2
 
 expr (T.EAnd pos e1 e2) =
     boolOp pos AT.EAnd e1 e2
@@ -146,9 +146,9 @@ cannotCompare :: AT.Type -> AT.Type -> Err
 cannotCompare t1 t2 =
     "Cannot compare expressions of type " <> show t1 <> " and " <> show t2
 
-cannotCompareIneq :: AT.Type -> Err
-cannotCompareIneq t1 =
-    "Cannot compare expressions of type " <> show t1 <> " for inequality"
+cannotCompareOrd :: AT.Type -> Err
+cannotCompareOrd t1 =
+    "Cannot compare expressions of type " <> show t1 <> " for ordering"
 
 cannotBoolOp :: AT.Type -> AT.Type -> Err
 cannotBoolOp t1 t2 =

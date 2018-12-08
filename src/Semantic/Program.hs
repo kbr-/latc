@@ -19,12 +19,21 @@ import Control.Monad.Trans.Maybe
 runProgram :: T.Program Pos -> Either [Err] AT.Program
 runProgram = runIdentity . runErrorT . program
 
+predefFuns :: M.Map AT.Ident AT.FunType
+predefFuns = M.fromList
+    [("printInt",    AT.FunType AT.Void [AT.Int])
+    ,("printString", AT.FunType AT.Void [AT.Str])
+    ,("error",       AT.FunType AT.Void [])
+    ,("readInt",     AT.FunType AT.Int  [])
+    ,("readString",  AT.FunType AT.Str  [])
+    ]
+
 type ZP = ErrorT Err Identity
 
 program :: T.Program Pos -> ZP AT.Program
 program (T.Program _ defs) = do
     defs <- fromErrors . runDecls $ defs
-    let funs = foldr (\FunDef{..} -> M.insert funIdent funType) M.empty defs
+    let funs = foldr (\FunDef{..} -> M.insert funIdent funType) predefFuns defs
     runAll . map (def $ funs) $ defs
 
 data FunDef = FunDef
@@ -58,7 +67,7 @@ def funs FunDef{..} = do
     isReturn _          = False
 
 runDecls :: [T.TopDef Pos] -> Either [Err] [FunDef]
-runDecls = flip evalState S.empty . runErrorT . runAll . map decl
+runDecls = flip evalState (M.keysSet predefFuns) . runErrorT . runAll . map decl
 
 type ZD = ErrorT Err (State (S.Set AT.Ident))
 
