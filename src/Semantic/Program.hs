@@ -1,4 +1,5 @@
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE LambdaCase #-}
 module Semantic.Program where
 
 import qualified Annotated as AT
@@ -47,7 +48,7 @@ data FunDef = FunDef
 def :: M.Map AT.Ident AT.FunType -> FunDef -> ZP AT.TopDef
 def funs FunDef{..} = do
     (body, locals) <- fromErrors . SS.runStmts env . fromBlock $ body
-    when (funRetType /= AT.Void && (null body || not (isReturn . last $ body))) $
+    when (funRetType /= AT.Void && not (alwaysReturn body)) $
         reportErrorWithPos funPos $ mustReturn funIdent
     pure AT.FunDef{..}
   where
@@ -62,9 +63,6 @@ def funs FunDef{..} = do
     funRetType = case funType of (AT.FunType typ _) -> typ
     insertArgVar varId (AT.ArgInfo _ (AT.VarInfo ident typ)) = M.insert ident (varId, typ)
     fromBlock (T.Block _ b) = b
-    isReturn (AT.Ret _) = True
-    isReturn (AT.VRet)  = True
-    isReturn _          = False
 
 runDecls :: [T.TopDef Pos] -> Either [Err] [FunDef]
 runDecls = flip evalState (M.keysSet predefFuns) . runErrorT . runAll . map decl
@@ -111,6 +109,88 @@ arg (T.Arg pos typ (T.Ident ident)) = do
         }
     pure typ
 
+alwaysReturn :: [AT.Stmt] -> Bool
+alwaysReturn = foldr ((||) . alwaysReturns) False
+
+alwaysReturns :: AT.Stmt -> Bool
+alwaysReturns (AT.BStmt xs) = alwaysReturn xs
+alwaysReturns (AT.Ret _) = True
+alwaysReturns (AT.VRet) = True
+alwaysReturns (AT.Cond e s) =
+    case tryEvalBool e of
+        Just True -> alwaysReturns s
+        _         -> False
+alwaysReturns (AT.CondElse e sThen sElse) =
+    case tryEvalBool e of
+        Just True  -> alwaysReturns sThen
+        Just False -> alwaysReturns sElse
+        _          -> alwaysReturns sThen && alwaysReturns sElse
+alwaysReturns (AT.While e _) =
+    case tryEvalBool e of
+        Just True -> True -- actually infinite loop
+        _         -> False
+alwaysReturns _ = False
+
+tryEvalBool :: AT.Expr -> Maybe Bool
+tryEvalBool e = case tryEval e of
+    Just (AT.ELitTrue)  -> Just True
+    Just (AT.ELitFalse) -> Just False
+    _                   -> Nothing
+
+-- Evaluates an expression without variables and function applications.
+-- Might evaluate differently in runtime due to integer overflows etc.
+-- In this case the behavior is undefined.
+tryEval :: AT.Expr -> Maybe AT.Expr
+tryEval e@(AT.ELitInt _) = Just e
+tryEval e@AT.ELitTrue = Just e
+tryEval e@AT.ELitFalse = Just e
+tryEval e@(AT.EString _) = Just e
+tryEval (AT.Neg e) = (\(AT.ELitInt i) -> AT.ELitInt (-i)) <$> tryEval e
+tryEval (AT.Not e) = flip fmap (tryEval e) $ \case
+    AT.ELitTrue  -> AT.ELitFalse
+    AT.ELitFalse -> AT.ELitTrue
+tryEval (AT.EMul e1 op e2) = case (tryEval e1, tryEval e2) of
+    (Just (AT.ELitInt x), Just (AT.ELitInt y)) -> Just . AT.ELitInt $ case op of
+        AT.Times -> x * y
+        AT.Div   -> x `div` y
+        AT.Mod   -> x `mod` y
+    _ -> Nothing
+tryEval (AT.EAddInt e1 op e2) = case (tryEval e1, tryEval e2) of
+    (Just (AT.ELitInt x), Just (AT.ELitInt y)) -> Just . AT.ELitInt $ case op of
+        AT.Plus  -> x + y
+        AT.Minus -> x - y
+    _ -> Nothing
+tryEval (AT.EAddString e1 e2) = case (tryEval e1, tryEval e2) of
+    (Just (AT.EString x), Just (AT.EString y)) -> Just . AT.EString $ x ++ y
+    _ -> Nothing
+tryEval (AT.ERel e1 op e2) = case (tryEval e1, tryEval e2) of
+    (Just (AT.ELitInt x), Just (AT.ELitInt y)) -> Just . boolToExpr $ case op of
+        AT.LTH -> x < y
+        AT.LE  -> x <= y
+        AT.GTH -> x > y
+        AT.GE  -> x >= y
+        AT.EQU -> x == y
+        AT.NE  -> x /= y
+    (Just x, Just y) -> Just . boolToExpr $ case op of
+        AT.EQU -> x == y
+        AT.NE  -> x /= y
+    _ -> Nothing
+tryEval (AT.EAnd e1 e2) = case (tryEval e1, tryEval e2) of
+    (Just x, Just y) -> Just . boolToExpr $ (exprToBool x) && (exprToBool y)
+    _ -> Nothing
+tryEval (AT.EOr e1 e2) = case (tryEval e1, tryEval e2) of
+    (Just x, Just y) -> Just . boolToExpr $ (exprToBool x) || (exprToBool y)
+    _ -> Nothing
+tryEval _ = Nothing
+
+exprToBool :: AT.Expr -> Bool
+exprToBool AT.ELitTrue  = True
+exprToBool AT.ELitFalse = False
+
+boolToExpr :: Bool -> AT.Expr
+boolToExpr True  = AT.ELitTrue
+boolToExpr False = AT.ELitFalse
+
 argAlreadyDeclared :: AT.Ident -> Err
 argAlreadyDeclared ident =
     "Argument already declared: " <> ident
@@ -121,4 +201,4 @@ funAlreadyDeclared ident =
 
 mustReturn :: AT.Ident -> Err
 mustReturn ident =
-    "Last statement in function " <> ident <> " must be a return"
+    "Could not deduce that function " <> ident <> " always returns"

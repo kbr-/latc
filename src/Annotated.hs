@@ -58,8 +58,10 @@ data Expr
     | ERel Expr RelOp Expr
     | EAnd Expr Expr
     | EOr Expr Expr
+    deriving Eq
 
 data LVal = LVal VarId
+    deriving Eq
 
 data AddOp = Plus | Minus
   deriving (Eq, Ord, Show, Read)
