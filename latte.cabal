@@ -20,7 +20,9 @@ library
                        Semantic.Expr,
                        Semantic.Stmt,
                        Semantic.Program,
-                       Semantic.ErrorT
+                       Semantic.ErrorT,
+                       Quad,
+                       Intermediate.Generate
   build-depends:       base >= 4.7 && < 5,
                        containers, array, mtl, transformers
   hs-source-dirs:      src, src/bnfc

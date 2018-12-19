@@ -35,7 +35,7 @@ program :: T.Program Pos -> ZP AT.Program
 program (T.Program _ defs) = do
     defs <- fromErrors . runDecls $ defs
     let funs = foldr (\FunDef{..} -> M.insert funIdent funType) predefFuns defs
-    runAll . map (def $ funs) $ defs
+    runAll . map (def funs) $ defs
 
 data FunDef = FunDef
     { funType  :: AT.FunType
