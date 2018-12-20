@@ -22,6 +22,7 @@ library
                        Semantic.Program,
                        Semantic.ErrorT,
                        Quad,
+                       PrintQuad,
                        Intermediate.Generate
   build-depends:       base >= 4.7 && < 5,
                        containers, array, mtl, transformers

@@ -9,6 +9,8 @@ import ParLatte
 import ErrM
 
 import Semantic.Program
+import Intermediate.Generate
+import PrintQuad
 
 main :: IO ()
 main = do
@@ -19,6 +21,7 @@ main = do
     maybeProg <- case pProgram $ myLexer code of
         Bad s   -> putStrLn ("ERROR\n" ++ s) *> exitFailure
         Ok tree -> pure $ runProgram tree
-    case maybeProg of
+    prog <- case maybeProg of
         Left errs -> putStrLn "ERROR" *> putStrLn (concat . intersperse "\n" $ errs) *> exitFailure
-        Right _ -> putStrLn "OK"
+        Right x -> putStrLn "OK" *> pure x
+    mapM_ (putStrLn . printFunDef . generate) prog

@@ -1,6 +1,6 @@
 module Quad where
 
-data FunDef = FunDef String [Arg] [Quad]
+data FunDef = FunDef String [Var] [Quad]
 
 data Quad
     = BinInt Var Arg BinOp Arg

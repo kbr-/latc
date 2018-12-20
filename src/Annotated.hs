@@ -10,7 +10,7 @@ data TopDef = FunDef
     { funType :: FunType
     , funIdent :: Ident
     , args :: M.Map VarId ArgInfo
-    , locals :: M.Map VarId VarInfo
+    , locals :: M.Map VarId VarInfo -- all local variables, including arguments
     , body :: Block
     }
 
@@ -19,6 +19,7 @@ type VarId = Int
 data VarInfo = VarInfo Ident Type
 
 data ArgInfo = ArgInfo Int VarInfo
+--                     ^ the argument's position
 
 type Block = [Stmt]
 

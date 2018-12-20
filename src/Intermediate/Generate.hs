@@ -1,29 +1,49 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE RecordWildCards #-}
 module Intermediate.Generate where
 
 import qualified Annotated as T
 import Quad
 import Data.Functor.Identity
 import Data.Foldable
+import Data.Maybe
+import Data.Monoid
+import Control.Monad.Reader
+import Control.Monad.State.Strict
+import Control.Monad.Writer.Strict
+import Control.Exception.Base
+import GHC.Exts (sortWith)
+import qualified Data.Map as M
 import Prelude hiding (EQ, LT, GT)
 
-type GenQ = Identity
+data GenSt = GenSt
+    { temps  :: Int
+    , labels :: Int
+    }
+
+type GenQ = WriterT [Quad] (StateT GenSt (Reader (M.Map T.VarId T.VarInfo)))
 
 getVar :: T.LVal -> GenQ String
-getVar = undefined
+getVar (T.LVal x) = do
+    var <- reader (M.lookup x)
+    assert (isJust var) $ case var of
+        (Just (T.VarInfo ident _)) -> pure $ ident <> show x
 
 newTemp :: GenQ String
-newTemp = undefined
+newTemp = temps <$> get >>= \t -> modify (\s -> s { temps = t + 1 }) *> pure ("t" <> show t)
 
 newLabel :: GenQ String
-newLabel = undefined
+newLabel = labels <$> get >>= \l -> modify (\s -> s { labels = l + 1 }) *> pure ("l" <> show l)
 
 emit :: Quad -> GenQ ()
-emit = undefined
+emit q = tell [q]
 
 generate :: T.TopDef -> FunDef
-generate = undefined
+generate T.FunDef {..} = FunDef funIdent args' qs
+  where args' = map (\(x, T.ArgInfo _ (T.VarInfo ident _)) -> ident <> show x)
+              . sortWith (\(_, T.ArgInfo i _) -> i) . M.toList $ args
+        qs = flip runReader locals . flip evalStateT (GenSt 0 0) . execWriterT $ traverse_ stmt body
 
 stmt :: T.Stmt -> GenQ ()
 
@@ -36,7 +56,7 @@ stmt (T.Decl typ xs) = for_ xs $ \case
     T.Init v e -> Move <$> getVar v <*> expr e >>= emit
   where
     def = case typ of
-        T.Str -> ConstS ""
+        T.Str -> ConstS "\"\""
         _     -> ConstI 0
 
 stmt (T.Ass v e) = Move <$> getVar v <*> expr e >>= emit
@@ -74,6 +94,7 @@ stmt (T.CondElse e s1 s2) = case e of
 stmt (T.While e s) = do
     lCond <- newLabel
     lBody <- newLabel
+    emit $ Jump lCond
     emit $ Mark lBody
     stmt s
     emit $ Mark lCond
