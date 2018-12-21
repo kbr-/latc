@@ -51,11 +51,12 @@ def funs FunDef{..} = do
     when (funRetType /= AT.Void && not (alwaysReturn body)) $
         reportErrorWithPos funPos $ mustReturn funIdent
     pure AT.FunDef{..}
+    -- TODO: ensure void return
   where
     env = SS.Env
         { funs = funs
         , scopeStack = [SS.Scope { vars = M.foldrWithKey insertArgVar M.empty args }]
-        , nextVarId = (+1) . foldr max 0 . M.keys $ args
+        , nextVarId = (+1) . foldr max (-1) . M.keys $ args
         , funRetType = funRetType
         , locals = fmap (\(AT.ArgInfo _ v) -> v) args
         }

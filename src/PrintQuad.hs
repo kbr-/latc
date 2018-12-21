@@ -18,16 +18,21 @@ pQ = \case
 
 printQuad :: Quad -> String
 printQuad = \case
-    BinInt v a1 op a2   -> v <> " := " <> printArg a1 <> " " <> printBinOp op <> " " <> printArg a2
-    AddStr v a1 a2      -> v <> " := " <> printArg a1 <> " ++ " <> printArg a2
-    Neg v a             -> v <> " := -" <> printArg a
-    Move v a            -> v <> " := " <> printArg a
+    Assign v e          -> v <> " = " <> printExp e
     Jump l              -> "goto " <> l
     Mark l              -> l <> ":"
     CondJump a1 op a2 l -> "if " <> printArg a1 <> " " <> printRelOp op <> " " <> printArg a2 <> " goto " <> l
-    Call v f as         -> v <> " := " <> f <> "(" <> (concat $ intersperse "," $ map printArg as) <> ")"
     Ret a               -> "return " <> printArg a
     VRet                -> "return"
+    Exp e               -> printExp e
+
+printExp :: Exp -> String
+printExp = \case
+    BinInt a1 op a2 -> printArg a1 <> " " <> printBinOp op <> " " <> printArg a2
+    AddStr a1 a2    -> printArg a1 <> " ++ " <> printArg a2
+    Neg a           -> "-(" <> printArg a <> ")"
+    Call f as       -> f <> "(" <> (concat $ intersperse "," $ map printArg as) <> ")"
+    Val a           -> printArg a
 
 printArg :: Arg -> String
 printArg = \case

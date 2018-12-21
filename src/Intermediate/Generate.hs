@@ -36,6 +36,12 @@ newTemp = temps <$> get >>= \t -> modify (\s -> s { temps = t + 1 }) *> pure ("t
 newLabel :: GenQ String
 newLabel = labels <$> get >>= \l -> modify (\s -> s { labels = l + 1 }) *> pure ("l" <> show l)
 
+expTemp :: Exp -> GenQ Var
+expTemp e = do
+    t <- newTemp
+    emit $ Assign t e
+    pure t
+
 emit :: Quad -> GenQ ()
 emit q = tell [q]
 
@@ -52,20 +58,20 @@ stmt T.Empty = pure ()
 stmt (T.BStmt xs) = traverse_ stmt xs
 
 stmt (T.Decl typ xs) = for_ xs $ \case
-    T.NoInit v -> Move <$> getVar v <*> pure def >>= emit
-    T.Init v e -> Move <$> getVar v <*> expr e >>= emit
+    T.NoInit v -> Assign <$> getVar v <*> pure def >>= emit
+    T.Init v e -> Assign <$> getVar v <*> expr e >>= emit
   where
-    def = case typ of
-        T.Str -> ConstS "\"\""
+    def = Val $ case typ of
+        T.Str -> ConstS "\"\"" -- TODO?
         _     -> ConstI 0
 
-stmt (T.Ass v e) = Move <$> getVar v <*> expr e >>= emit
+stmt (T.Ass v e) = Assign <$> getVar v <*> expr e >>= emit
 
-stmt (T.Incr v) = getVar v >>= \v -> emit $ BinInt v (Var v) Plus (ConstI 1)
+stmt (T.Incr v) = getVar v >>= \v -> emit $ Assign v $ BinInt (Var v) Plus (ConstI 1)
 
-stmt (T.Decr v) = getVar v >>= \v -> emit $ BinInt v (Var v) Minus (ConstI 1)
+stmt (T.Decr v) = getVar v >>= \v -> emit $ Assign v $ BinInt (Var v) Minus (ConstI 1)
 
-stmt (T.Ret e) = Ret <$> expr e >>= emit
+stmt (T.Ret e) = Ret <$> argExpr e >>= emit
 
 stmt T.VRet = emit VRet
 
@@ -100,7 +106,7 @@ stmt (T.While e s) = do
     emit $ Mark lCond
     jumpIfTrue e lBody
 
-stmt (T.SExp e) = expr e *> pure ()
+stmt (T.SExp e) = Exp <$> expr e >>= emit
 
 jumpIfFalse :: T.Expr -> Label -> GenQ ()
 jumpIfFalse e l = case e of
@@ -108,8 +114,8 @@ jumpIfFalse e l = case e of
     T.ELitFalse -> emit $ Jump l
     T.Not e -> jumpIfTrue e l
     T.ERel e1 (relOp -> op) e2 -> do
-        t1 <- expr e1
-        t2 <- expr e2
+        t1 <- argExpr e1
+        t2 <- argExpr e2
         emit $ CondJump t1 (negRelOp op) t2 l
     T.EAnd e1 e2 -> do
         jumpIfFalse e1 l
@@ -119,7 +125,7 @@ jumpIfFalse e l = case e of
         jumpIfTrue e1 lEnd
         jumpIfFalse e2 l
         emit $ Mark lEnd
-    e -> expr e >>= \t -> emit $ CondJump t EQ (ConstI 0) l
+    e -> argExpr e >>= \t -> emit $ CondJump t EQ (ConstI 0) l
 
 jumpIfTrue :: T.Expr -> Label -> GenQ ()
 jumpIfTrue e l = case e of
@@ -127,8 +133,8 @@ jumpIfTrue e l = case e of
     T.ELitFalse -> pure ()
     T.Not e -> jumpIfFalse e l
     T.ERel e1 (relOp -> op) e2 -> do
-        t1 <- expr e1
-        t2 <- expr e2
+        t1 <- argExpr e1
+        t2 <- argExpr e2
         emit $ CondJump t1 op t2 l
     T.EAnd e1 e2 -> do
         lEnd <- newLabel
@@ -138,104 +144,82 @@ jumpIfTrue e l = case e of
     T.EOr e1 e2 -> do
         jumpIfTrue e1 l
         jumpIfTrue e2 l
-    e -> expr e >>= \t -> emit $ CondJump t NE (ConstI 0) l
+    e -> argExpr e >>= \t -> emit $ CondJump t NE (ConstI 0) l
 
-expr :: T.Expr -> GenQ Arg
+argExpr :: T.Expr -> GenQ Arg
+argExpr e = expr e >>= \case
+    Val a -> pure a
+    e     -> Var <$> expTemp e
 
-expr (T.EVar v) = Var <$> getVar v
+expr :: T.Expr -> GenQ Exp
 
-expr (T.ELitInt x) = pure $ ConstI x
+expr (T.EVar v) = Val . Var <$> getVar v
 
-expr T.ELitTrue = pure $ ConstI 1
+expr (T.ELitInt x) = pure . Val $ ConstI x
 
-expr T.ELitFalse = pure $ ConstI 0
+expr T.ELitTrue = pure . Val $ ConstI 1
 
-expr (T.EApp f es) = do
-    ts <- traverse expr es
-    r <- newTemp
-    emit $ Call r f ts
-    pure $ Var r
+expr T.ELitFalse = pure . Val $ ConstI 0
 
-expr (T.EString x) = pure $ ConstS x
+expr (T.EApp f es) = Call f <$> traverse argExpr es
 
-expr (T.Neg e) = do
-    t <- expr e
-    r <- newTemp
-    emit $ Neg r t
-    pure $ Var r
+expr (T.EString x) = pure . Val $ ConstS x
 
-expr (T.Not e) = do
-    t <- expr e
-    r <- newTemp
-    emit $ BinInt r t Xor (ConstI 1)
-    pure $ Var r
+expr (T.Neg e) = Neg <$> argExpr e
 
-expr (T.EMul e1 (mulOp -> op) e2) = do
-    t1 <- expr e1
-    t2 <- expr e2 -- TODO: optimize order
-    r <- newTemp
-    emit $ BinInt r t1 op t2
-    pure $ Var r
+expr (T.Not e) = BinInt (ConstI 1) Xor <$> argExpr e
 
-expr (T.EAddInt e1 (addOp -> op) e2) = do
-    t1 <- expr e1
-    t2 <- expr e2
-    r <- newTemp
-    emit $ BinInt r t1 op t2
-    pure $ Var r
+expr (T.EMul e1 (mulOp -> op) e2) = BinInt <$> argExpr e1 <*> pure op <*> argExpr e2 -- TODO: opt order
 
-expr (T.EAddString e1 e2) = do
-    t1 <- expr e1
-    t2 <- expr e2
-    r <- newTemp
-    emit $ AddStr r t1 t2
-    pure $ Var r
+expr (T.EAddInt e1 (addOp -> op) e2) = BinInt <$> argExpr e1 <*> pure op <*> argExpr e2
+
+expr (T.EAddString e1 e2) = AddStr <$> argExpr e1 <*> argExpr e2
 
 expr (T.ERel e1 (relOp -> op) e2) = do
-    t1 <- expr e1
-    t2 <- expr e2
+    t1 <- argExpr e1
+    t2 <- argExpr e2
     r <- newTemp
     lTrue <- newLabel
     lEnd <- newLabel
     traverse emit 
         [ CondJump t1 op t2 lTrue
-        , Move r (ConstI 0)
+        , Assign r (Val $ ConstI 0)
         , Jump lEnd
         , Mark lTrue
-        , Move r (ConstI 1)
+        , Assign r (Val $ ConstI 1)
         , Mark lEnd
         ]
-    pure $ Var r
+    pure $ Val $ Var r
 
 expr (T.EAnd e1 e2) = do
     t1 <- expr e1
     r <- newTemp
     lEnd <- newLabel
     traverse emit
-        [ Move r t1
+        [ Assign r t1
         , CondJump (Var r) EQ (ConstI 0) lEnd
         ]
     t2 <- expr e2
     traverse emit
-        [ Move r t2
+        [ Assign r t2
         , Mark lEnd
         ]
-    pure $ Var r
+    pure $ Val $ Var r
 
 expr (T.EOr e1 e2) = do
     t1 <- expr e1
     r <- newTemp
     lEnd <- newLabel
     traverse emit
-        [ Move r t1
+        [ Assign r t1
         , CondJump (Var r) NE (ConstI 0) lEnd
         ]
     t2 <- expr e2
     traverse emit
-        [ Move r t2
+        [ Assign r t2
         , Mark lEnd
         ]
-    pure $ Var r
+    pure $ Val $ Var r
 
 mulOp :: T.MulOp -> BinOp
 mulOp = \case

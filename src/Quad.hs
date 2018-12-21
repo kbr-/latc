@@ -3,16 +3,20 @@ module Quad where
 data FunDef = FunDef String [Var] [Quad]
 
 data Quad
-    = BinInt Var Arg BinOp Arg
-    | AddStr Var Arg Arg
-    | Neg Var Arg
-    | Move Var Arg
+    = Assign Var Exp
     | Jump Label
     | Mark Label
     | CondJump Arg RelOp Arg Label
-    | Call Var Fun [Arg]
     | Ret Arg
     | VRet
+    | Exp Exp
+
+data Exp
+    = BinInt Arg BinOp Arg
+    | AddStr Arg Arg
+    | Neg Arg
+    | Val Arg
+    | Call Fun [Arg]
 
 type Var = String
 
