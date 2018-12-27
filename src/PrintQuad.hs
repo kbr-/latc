@@ -22,15 +22,12 @@ printQuad = \case
     Jump l              -> "goto " <> l
     Mark l              -> l <> ":"
     CondJump a1 op a2 l -> "if " <> printArg a1 <> " " <> printRelOp op <> " " <> printArg a2 <> " goto " <> l
-    Ret a               -> "return " <> printArg a
-    VRet                -> "return"
     Exp e               -> printExp e
 
 printExp :: Exp -> String
 printExp = \case
     BinInt a1 op a2 -> printArg a1 <> " " <> printBinOp op <> " " <> printArg a2
     AddStr a1 a2    -> printArg a1 <> " ++ " <> printArg a2
-    Neg a           -> "-(" <> printArg a <> ")"
     Call f as       -> f <> "(" <> (concat $ intersperse "," $ map printArg as) <> ")"
     Val a           -> printArg a
 

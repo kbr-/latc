@@ -23,7 +23,8 @@ library
                        Semantic.ErrorT,
                        Quad,
                        PrintQuad,
-                       Intermediate.Generate
+                       Intermediate.Generate,
+                       Asm.Generate
   build-depends:       base >= 4.7 && < 5,
                        containers, array, mtl, transformers
   hs-source-dirs:      src, src/bnfc

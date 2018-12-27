@@ -7,14 +7,11 @@ data Quad
     | Jump Label
     | Mark Label
     | CondJump Arg RelOp Arg Label
-    | Ret Arg
-    | VRet
     | Exp Exp
 
 data Exp
     = BinInt Arg BinOp Arg
     | AddStr Arg Arg
-    | Neg Arg
     | Val Arg
     | Call Fun [Arg]
 
@@ -44,3 +41,9 @@ data RelOp
     | NE
 
 type Fun = String
+
+retVar :: String
+retVar = "r"
+
+lRet :: Label
+lRet = "Lret"

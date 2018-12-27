@@ -51,7 +51,6 @@ def funs FunDef{..} = do
     when (funRetType /= AT.Void && not (alwaysReturn body)) $
         reportErrorWithPos funPos $ mustReturn funIdent
     pure AT.FunDef{..}
-    -- TODO: ensure void return
   where
     env = SS.Env
         { funs = funs

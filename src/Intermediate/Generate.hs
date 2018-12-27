@@ -46,9 +46,10 @@ emit :: Quad -> GenQ ()
 emit q = tell [q]
 
 generate :: T.TopDef -> FunDef
-generate T.FunDef {..} = FunDef funIdent args' qs
+generate T.FunDef {..} = FunDef funIdent args' qs'
   where args' = map (\(x, T.ArgInfo _ (T.VarInfo ident _)) -> ident <> show x)
               . sortWith (\(_, T.ArgInfo i _) -> i) . M.toList $ args
+        qs' = qs <> [Mark lRet]
         qs = flip runReader locals . flip evalStateT (GenSt 0 0) . execWriterT $ traverse_ stmt body
 
 stmt :: T.Stmt -> GenQ ()
@@ -71,9 +72,11 @@ stmt (T.Incr v) = getVar v >>= \v -> emit $ Assign v $ BinInt (Var v) Plus (Cons
 
 stmt (T.Decr v) = getVar v >>= \v -> emit $ Assign v $ BinInt (Var v) Minus (ConstI 1)
 
-stmt (T.Ret e) = Ret <$> argExpr e >>= emit
+stmt (T.Ret e) = do
+    emit =<< Assign retVar <$> expr e
+    emit $ Jump lRet
 
-stmt T.VRet = emit VRet
+stmt T.VRet = emit $ Jump lRet
 
 stmt (T.Cond e s) = case e of
     T.ELitTrue -> stmt s
@@ -165,7 +168,7 @@ expr (T.EApp f es) = Call f <$> traverse argExpr es
 
 expr (T.EString x) = pure . Val $ ConstS x
 
-expr (T.Neg e) = Neg <$> argExpr e
+expr (T.Neg e) = BinInt (ConstI 0) Minus <$> argExpr e
 
 expr (T.Not e) = BinInt (ConstI 1) Xor <$> argExpr e
 
