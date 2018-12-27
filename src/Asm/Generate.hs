@@ -1,6 +1,8 @@
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE LambdaCase #-}
 module Asm.Generate where
 
+import Control.Arrow
 import Control.Exception
 import Control.Monad.Reader
 import Control.Monad.State.Strict
@@ -98,7 +100,41 @@ fun blocks args name =
 -- Compute uses of each variable after each quad and set of vars alive at the beginning of block
 -- given the set of vars alive at the end of the block
 uses :: [Q.Quad] -> S.Set Q.Var -> ([(Q.Quad, M.Map Q.Var [Int])], S.Set Q.Var)
-uses = undefined
+uses qs aliveEnd = (reverse *** (M.keysSet . fst)) . flip runState start . forM (reverse qs) $ \q -> do
+    (u, i) <- get
+    put $ (update i q u, i-1)
+    pure (q, u)
+  where
+    update :: Int -> Q.Quad -> M.Map Q.Var [Int] -> M.Map Q.Var [Int]
+    update i = \case
+        Q.Assign v e         -> flip (foldr $ use i) (vars e) . kill v
+        Q.CondJump a1 _ a2 _ -> flip (foldr $ use i) $ vars' [a1, a2]
+        Q.Exp e              -> flip (foldr $ use i) $ vars e
+        _                    -> id
+
+    use :: Int -> Q.Var -> M.Map Q.Var [Int] -> M.Map Q.Var [Int]
+    use i v = M.insertWith (<>) v [i]
+
+    kill :: Q.Var -> M.Map Q.Var [Int] -> M.Map Q.Var [Int]
+    kill v = M.delete v
+
+    vars :: Q.Exp -> [Q.Var]
+    vars = \case
+        Q.BinInt a1 _ a2 -> vars' [a1, a2]
+        Q.AddStr a1 a2   -> vars' [a1, a2]
+        Q.Val a          -> vars' [a]
+        Q.Call _ as      -> vars' as
+
+    vars' :: [Q.Arg] -> [Q.Var]
+    vars' = flip (>>=) $ \case
+        Q.Var v -> [v]
+        _       -> []
+
+    start :: (M.Map Q.Var [Int], Int)
+    start = (M.fromSet (const [cnt + 1]) aliveEnd, cnt)
+
+    cnt :: Int
+    cnt = length qs
 
 block :: [(Q.Quad, M.Map Q.Var [Int])]
 --       ^ List of quads and remaining uses of each variable after each quad
