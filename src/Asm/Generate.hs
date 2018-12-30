@@ -39,7 +39,9 @@ data Arg
     | AConst Integer
 
 newtype Env = Env
-    { crossVarLocs :: M.Map Q.Var Memloc }
+    { crossVarLocs :: M.Map Q.Var Memloc
+--    ^ Memory locations of cross variables, i.e. variables alive between blocks
+    }
 
 data SEnv = SEnv
     { _memLocs    :: [Memloc]
@@ -59,8 +61,15 @@ data Desc = Desc
     , _funState :: SEnv
     }
 
+data Use = Use
+    { _nextUse    :: Int
+    , _lastUse    :: Int
+    , _passesCall :: Bool
+    }
+
 makeLenses ''SEnv
 makeLenses ''Desc
+makeLenses ''Use
 
 fun :: [([Q.Quad], S.Set Q.Var)]
 --     ^ List of basic blocks and sets of variables alive at the end of each block
@@ -104,40 +113,42 @@ fun blocks rets args name =
                 , _savedRegs  = S.empty
                 }
 
-    (crossVarLocs, memLocs, nextOffset)
-        = foldr (\v (cvls, mls, off) ->
-                ( (if M.member v crossVarLocs' then id else M.insert v (Memloc off)) $ cvls
-                , Memloc off : mls
-                , off - 4))
-            (crossVarLocs', memLocs', -4) $ S.toList crossVars
-    (crossVarLocs', memLocs', _)
-        = foldr (\v (cvls, mls, off) ->
-                ( (if S.member v crossVars then M.insert v (Memloc off) else id) $ cvls
-                , Memloc off : mls
-                , off - 4))
-            (M.empty, [], fromIntegral $ 4 * (1 + length args)) $ reverse args
+    -- Allocate a memloc for every argument and every cross variable.
+    -- If a variable is both an argument and a cross variable, allocate only one memloc.
+    (crossVarLocs, memLocs, nextOffset) = foldr
+        (\v (cvls, mls, off) ->
+            if M.member v crossVarLocs'
+                then (cvls, mls, off)
+                else (M.insert v (Memloc off) cvls, Memloc off : mls, off - 4))
+        (crossVarLocs', memLocs', -4) $ S.toList crossVars
+    (crossVarLocs', memLocs', _) = foldr
+        (\v (cvls, mls, off) ->
+            ( (if S.member v crossVars then M.insert v (Memloc off) else id) $ cvls
+            , Memloc off : mls
+            , off - 4))
+        (M.empty, [], fromIntegral $ 4 * (1 + length args)) $ reverse args
     crossVars = S.unions . map (snd . uncurry nextUses) $ blocks
 
--- Compute next use of each variable after each quad and set of vars alive at the beginning of block
+-- Compute next Uses of each variable after each quad and set of vars alive at the beginning of block
 -- given the set of vars alive at the end of the block
-nextUses :: [Q.Quad] -> S.Set Q.Var -> ([(Q.Quad, M.Map Q.Var (Int, Bool))], S.Set Q.Var)
+nextUses :: [Q.Quad] -> S.Set Q.Var -> ([(Q.Quad, M.Map Q.Var Use)], S.Set Q.Var)
 nextUses qs aliveEnd = (reverse *** (M.keysSet . fst)) . flip runState start . forM (reverse qs) $ \q -> do
     (u, i) <- get
     let u' = if isCall q then markCall u else u
     put $ (update i q u', i-1)
     pure (q, u)
   where
-    update :: Int -> Q.Quad -> M.Map Q.Var (Int, Bool) -> M.Map Q.Var (Int, Bool)
+    update :: Int -> Q.Quad -> M.Map Q.Var Use -> M.Map Q.Var Use
     update i = \case
         Q.Assign v e         -> flip (foldr $ use i) (vars e) . kill v
         Q.CondJump a1 _ a2 _ -> flip (foldr $ use i) $ vars' [a1, a2]
         Q.Exp e              -> flip (foldr $ use i) $ vars e
         _                    -> id
 
-    use :: Int -> Q.Var -> M.Map Q.Var (Int, Bool) -> M.Map Q.Var (Int, Bool)
-    use i v = M.insert v (i, False)
+    use :: Int -> Q.Var -> M.Map Q.Var Use -> M.Map Q.Var Use
+    use i v = at v %~ maybe (Just $ Use i i False) (Just . (nextUse .~ i))
 
-    kill :: Q.Var -> M.Map Q.Var (Int, Bool) -> M.Map Q.Var (Int, Bool)
+    kill :: Q.Var -> M.Map Q.Var Use -> M.Map Q.Var Use
     kill = M.delete
 
     isCall :: Q.Quad -> Bool
@@ -145,8 +156,8 @@ nextUses qs aliveEnd = (reverse *** (M.keysSet . fst)) . flip runState start . f
         Q.Assign _ (Q.Call _ _) -> True
         Q.Exp (Q.Call _ _)      -> True
 
-    markCall :: M.Map Q.Var (Int, Bool) -> M.Map Q.Var (Int, Bool)
-    markCall = M.map (second $ const True)
+    markCall :: M.Map Q.Var Use -> M.Map Q.Var Use
+    markCall = M.map $ passesCall .~ True
 
     vars :: Q.Exp -> [Q.Var]
     vars = \case
@@ -160,14 +171,14 @@ nextUses qs aliveEnd = (reverse *** (M.keysSet . fst)) . flip runState start . f
         Q.Var v -> [v]
         _       -> []
 
-    start :: (M.Map Q.Var (Int, Bool), Int)
-    start = (M.fromSet (const (cnt + 1, False)) aliveEnd, cnt)
+    start :: (M.Map Q.Var Use, Int)
+    start = (M.fromSet (const $ Use (cnt + 1) (cnt + 1) False) aliveEnd, cnt)
 
     cnt :: Int
     cnt = length qs
 
 block ::
-    [(Q.Quad, M.Map Q.Var (Int, Bool))]
+    [(Q.Quad, M.Map Q.Var Use)]
 --  ^ List of quads and next use of each variable after each quad
 --    represented as positions in the list
  -> S.Set Q.Var
@@ -177,12 +188,10 @@ block ::
  -> RWS Env [Entry] SEnv ()
 block qs aliveBegin aliveEnd = do
     cvls <- reader crossVarLocs
-    let startLoc = flip M.foldrWithKey M.empty (\v l ->
-            if S.member v aliveBegin then M.insert v ([l], Nothing) else id) cvls
-        startMemVars = flip M.foldrWithKey M.empty (\v l ->
-            if S.member v aliveBegin then M.insert l [v] else id) cvls
-        endLoc = flip M.foldrWithKey M.empty (\v l ->
-            if S.member v aliveEnd then M.insert v l else id) cvls
+    let (startLoc, startMemVars, endLoc) = M.foldrWithKey (\v l (sL, sM, eL) ->
+            ( if S.member v aliveBegin then M.insert v ([l], Nothing) sL else sL
+            , if S.member v aliveBegin then M.insert l [v] sM else sM
+            , if S.member v aliveEnd then M.insert v l eL else eL)) (M.empty, M.empty, M.empty) cvls
         blockLen = length qs
     desc <- Desc startLoc startMemVars M.empty <$> get
     let (Desc{..}, code) = execRWS (mapM (uncurry quad) qs) BEnv{..} desc
@@ -206,8 +215,8 @@ type Z = RWS BEnv [Entry] Desc
 quad ::
     Q.Quad
 --  ^ Quad to generate assembly for
- -> M.Map Q.Var (Int, Bool)
---  ^ Next use of each variable after this quad and whether it occurs after a function call
+ -> M.Map Q.Var Use
+--  ^ Use of each variable after this quad
  -> Z ()
 quad q nextUses = case q of
     Q.Assign v (Q.BinInt v1 op v2) | op /= Q.Div && op /= Q.Mod -> do
@@ -306,7 +315,7 @@ quad q nextUses = case q of
   where
     call :: Q.Fun -> [Q.Arg] -> Z ()
     call f as = do
-        forM_ (reverse as) $ emit . pushl . arg
+        forM_ (reverse as) $ \a -> locate a >>= (emit . pushl)
         forM_ as $ freeDesc
         mapM_ spill =<< filterM (dirtyReg avs) callerSaveRegs
         emit $ calll f
@@ -334,9 +343,9 @@ quad q nextUses = case q of
     chooseRegister :: MonadState Desc m => S.Set Q.Var -> Maybe Q.Var -> m Reg
     chooseRegister avs v = last <$> sortWithM (\r -> sequence
         [ fromEnum <$> isFree r
-        , (fromEnum . not) <$> dirtyReg avs r
-        , pure $ (\b -> (fromEnum . if b then id else not) (calleeSave r)) $ passesCall v
-        , (minimum . concatMap getUses) <$> getVarsR r
+        , fromEnum . not <$> dirtyReg avs r
+        , pure $ (\b -> (fromEnum . if b then id else not) (calleeSave r)) $ passesCall' v
+        , minimum . catMaybes . map getNextUse <$> getVarsR r
         ]) generalRegs
 
     chooseMem :: [Q.Var] -> Z Memloc
@@ -348,19 +357,16 @@ quad q nextUses = case q of
         case mems' of
             []    -> newMem
             mems' -> last <$> sortWithM (\m -> sequence
-                [ anyM (\v -> andM [lastUse v, ((== Just m) . M.lookup v) <$> reader endLoc]) vs
-                , (not . elem m . M.elems) <$> reader endLoc
+                [ anyM (\v -> andM [reachesEnd v, (== Just m) . M.lookup v <$> reader endLoc]) vs
+                , not . elem m . M.elems <$> reader endLoc
                 ]) mems'
-
-    sortWithM :: (Applicative m, Ord b) => (a -> m b) -> [a] -> m [a]
-    sortWithM f l = (map fst . sortBy (compare `on` snd)) <$> traverse (\x -> (x, ) <$> f x) l
 
     dirtyReg :: MonadState Desc m => S.Set Q.Var -> Reg -> m Bool
     dirtyReg avs r = getVarsR r >>= anyM (dirtyVar avs)
 
     dirtyVar :: MonadState Desc m => S.Set Q.Var -> Q.Var -> m Bool
-    dirtyVar avs v = if (not $ alive avs v) then pure False else
-        (null . fst . (\l -> assert (M.member v l) $ l M.! v)) <$> use loc
+    dirtyVar avs v = if not $ alive avs v then pure False else
+        null . fst . (\l -> assert (M.member v l) $ l M.! v) <$> use loc
 
     locate :: MonadState Desc m => Q.Arg -> m Arg
     locate (Q.ConstI i) = pure $ AConst i
@@ -368,13 +374,9 @@ quad q nextUses = case q of
         Just r -> pure $ reg r
         _      -> getMems v >>= \m -> assert (not $ null m) $ pure $ mem $ head m
 
-    -- TODO: check the last use instead of the next use
-    lastUse :: MonadReader BEnv m => Q.Var -> m Bool
-    lastUse v = (\i ->
-        case M.lookup v nextUses of
-            Just (j, _) -> j == (i + 1)
-            _           -> False
-        ) <$> reader blockLen
+    reachesEnd :: MonadReader BEnv m => Q.Var -> m Bool
+    reachesEnd v = reader blockLen <&> \i ->
+        nextUses ^? at v . _Just . lastUse . to (== i + 1) ^. non False
 
     newMem :: Z Memloc
     newMem = zoom funState $ do
@@ -402,20 +404,18 @@ quad q nextUses = case q of
     isFree :: MonadState Desc m => Reg -> m Bool
     isFree r = null <$> getVarsR r
 
-    passesCall :: Maybe Q.Var -> Bool
-    passesCall (Just v) = snd $ M.findWithDefault (0, False) v nextUses
-    passesCall Nothing  = False
+    passesCall' :: Maybe Q.Var -> Bool
+    passesCall' (Just v) = nextUses ^? at v . _Just . passesCall ^. non False
+    passesCall' Nothing  = False
 
-    getUses :: Q.Var -> [Int]
-    getUses v = case M.lookup v nextUses of
-        Just (i, _) -> [i]
-        _           -> []
+    getNextUse :: Q.Var -> Maybe Int
+    getNextUse v = nextUses ^? at v . _Just . nextUse
 
     getVarsR :: MonadState Desc m => Reg -> m [Q.Var]
     getVarsR r = use $ regVars . at r . non []
 
     addVarR :: MonadState Desc m => Q.Var -> Reg -> m ()
-    addVarR v r = regVars . at r . non [] %= (v :)
+    addVarR v r = regVars . at r . non [] %= (union [v])
 
     setVarsR :: MonadState Desc m => [Q.Var] -> Reg -> m ()
     setVarsR vs r = regVars . at r ?= vs
@@ -427,7 +427,7 @@ quad q nextUses = case q of
     getVarsM m = use $ memVars . at m . non []
 
     addVarM :: MonadState Desc m => Q.Var -> Memloc -> m ()
-    addVarM v m = memVars . at m . non [] %= (v :)
+    addVarM v m = memVars . at m . non [] %= (union [v])
 
     setVarsM :: MonadState Desc m => [Q.Var] -> Memloc -> m ()
     setVarsM vs m = memVars %= M.insert m vs
@@ -443,13 +443,13 @@ quad q nextUses = case q of
     getReg = fmap snd . getLoc
 
     setReg :: MonadState Desc m => Maybe Reg -> Q.Var -> m ()
-    setReg r v = loc . at v . non ([], r) %= second (const r)
+    setReg r v = loc . at v . non ([], Nothing) %= second (const r)
 
     getMems :: MonadState Desc m => Q.Var -> m [Memloc]
     getMems = fmap fst . getLoc
 
     addMem :: MonadState Desc m => Memloc -> Q.Var -> m ()
-    addMem m v = loc . at v . non ([], Nothing) . _1 %= (m :)
+    addMem m v = loc . at v . non ([], Nothing) . _1 %= (union [m])
 
     delMem :: MonadState Desc m => Memloc -> Q.Var -> m ()
     delMem m v = loc . ix v . _1 %= delete m
@@ -460,83 +460,105 @@ quad q nextUses = case q of
     setLoc :: MonadState Desc m => ([Memloc], Maybe Reg) -> Q.Var -> m ()
     setLoc l v = loc . at v . non ([], Nothing) .= l
 
-oper :: Q.BinOp -> Arg -> Arg -> Entry
-oper = undefined
-
 label :: String -> Entry
-label = undefined
+label = (<> ":")
 
-jmp :: String -> Entry
-jmp = undefined
+jmp :: Q.Label -> Entry
+jmp = ("jmp " <>)
 
 jop :: Q.RelOp -> Q.Label -> Entry
-jop = undefined
+jop op l = (case op of
+    Q.LT -> "jl"
+    Q.LE -> "jle"
+    Q.GT -> "jg"
+    Q.GE -> "jge"
+    Q.EQ -> "je"
+    Q.NE -> "jne") <> " " <> l
 
 pushl :: Arg -> Entry
-pushl = undefined
-
-movl :: Arg -> Arg -> Entry
-movl = undefined
-
-subl :: Arg -> Arg -> Entry
-subl = undefined
-
-addl :: Arg -> Arg -> Entry
-addl = undefined
-
-cmpl :: Arg -> Arg -> Entry
-cmpl = undefined
+pushl = unOp "pushl"
 
 popl :: Arg -> Entry
-popl = undefined
-
-calll :: Q.Fun -> Entry
-calll = undefined
-
-cdq :: Entry
-cdq = undefined
+popl = unOp "popl"
 
 idivl :: Arg -> Entry
-idivl = undefined
+idivl = unOp "idivl"
+
+movl :: Arg -> Arg -> Entry
+movl = binOp "movl"
+
+addl :: Arg -> Arg -> Entry
+addl = oper Q.Plus
+
+subl :: Arg -> Arg -> Entry
+subl = oper Q.Minus
+
+cmpl :: Arg -> Arg -> Entry
+cmpl = binOp "cmpl"
+
+oper :: Q.BinOp -> Arg -> Arg -> Entry
+oper op = binOp (case op of
+    Q.Plus  -> "addl"
+    Q.Minus -> "subl"
+    Q.Times -> "mull"
+    Q.Xor   -> "xorl")
+
+calll :: Q.Fun -> Entry
+calll f = "calll " <> f
+
+cdq :: Entry
+cdq = "cdq"
+
+binOp :: String -> Arg -> Arg -> Entry
+binOp op a1 a2 = op <> " " <> printArg a1 <> ", " <> printArg a2
+
+unOp :: String -> Arg -> Entry
+unOp op a = op <> " " <> printArg a
+
+printArg :: Arg -> String
+printArg = \case
+    AReg (Reg s)      -> "%" <> s
+    AMem (Memloc off) -> show off <> "(%ebp)"
+    AConst i          -> "$" <> show i
 
 retl :: Entry
 retl = "retl"
 
 mem :: Memloc -> Arg
-mem = undefined
+mem = AMem
 
 reg :: Reg -> Arg
-reg = undefined
+reg = AReg
 
 con :: Integer -> Arg
-con = undefined
-
-arg :: Q.Arg -> Arg
-arg = undefined
+con = AConst
 
 generalRegs :: [Reg]
-generalRegs = [eax]
+generalRegs = [eax, ecx, edx, ebx, esi, edi]
 
 ebp :: Reg
-ebp = undefined
+ebp = Reg "ebp"
 
 esp :: Reg
-esp = undefined
+esp = Reg "esp"
 
 eax :: Reg
-eax = undefined
+eax = Reg "eax"
 
 ecx :: Reg
-ecx = undefined
+ecx = Reg "ecx"
 
 edx :: Reg
-edx = undefined
+edx = Reg "edx"
 
 ebx :: Reg
-ebx = undefined
+ebx = Reg "ebx"
 
 esi :: Reg
-esi = undefined
+esi = Reg "esi"
 
 edi :: Reg
-edi = undefined
+edi = Reg "edi"
+
+sortWithM :: (Applicative m, Ord b) => (a -> m b) -> [a] -> m [a]
+sortWithM f l = (map fst . sortBy (compare `on` snd)) <$> traverse (\x -> (x, ) <$> f x) l
