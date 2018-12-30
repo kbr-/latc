@@ -1,6 +1,6 @@
 module Quad where
 
-data FunDef = FunDef String [Var] [Quad]
+data FunDef = FunDef Bool String [Var] [Quad]
 
 data Quad
     = Assign Var Exp
@@ -29,6 +29,7 @@ data BinOp
     | Div
     | Mod
     | Xor
+    deriving Eq
 
 type Label = String
 

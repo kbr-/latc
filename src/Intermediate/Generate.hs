@@ -46,8 +46,11 @@ emit :: Quad -> GenQ ()
 emit q = tell [q]
 
 generate :: T.TopDef -> FunDef
-generate T.FunDef {..} = FunDef funIdent args' qs'
-  where args' = map (\(x, T.ArgInfo _ (T.VarInfo ident _)) -> ident <> show x)
+generate T.FunDef {..} = FunDef rets funIdent args' qs'
+  where rets = case funType of
+            (T.FunType T.Void _) -> False
+            _                    -> True
+        args' = map (\(x, T.ArgInfo _ (T.VarInfo ident _)) -> ident <> show x)
               . sortWith (\(_, T.ArgInfo i _) -> i) . M.toList $ args
         qs' = qs <> [Mark lRet]
         qs = flip runReader locals . flip evalStateT (GenSt 0 0) . execWriterT $ traverse_ stmt body
@@ -184,7 +187,7 @@ expr (T.ERel e1 (relOp -> op) e2) = do
     r <- newTemp
     lTrue <- newLabel
     lEnd <- newLabel
-    traverse emit 
+    traverse emit
         [ CondJump t1 op t2 lTrue
         , Assign r (Val $ ConstI 0)
         , Jump lEnd

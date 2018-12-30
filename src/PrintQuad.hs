@@ -7,7 +7,7 @@ import Data.List
 import Prelude hiding (EQ, LT, GT)
 
 printFunDef :: FunDef -> String
-printFunDef (FunDef f vs qs) =
+printFunDef (FunDef _ f vs qs) =
     "define " <> f <> "(" <> (concat $ intersperse "," $ vs) <> ") {\n" <>
         (concat $ intersperse "\n" $ map pQ qs) <> "\n}"
 

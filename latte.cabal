@@ -26,7 +26,7 @@ library
                        Intermediate.Generate,
                        Asm.Generate
   build-depends:       base >= 4.7 && < 5,
-                       containers, array, mtl, transformers
+                       containers, array, mtl, transformers, extra, lens
   hs-source-dirs:      src, src/bnfc
   default-language:    Haskell2010
 
