@@ -21,6 +21,7 @@ data Arg
     = ConstS String
     | ConstI Integer
     | Var Var
+    deriving Eq
 
 data BinOp
     = Plus

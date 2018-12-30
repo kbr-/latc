@@ -97,7 +97,7 @@ fun blocks rets args name =
     , retl
     ]
   where
-    memSize = _nextOffset
+    memSize = abs _nextOffset - 4
     savedRegs = S.toList _savedRegs
     retValCode = if not rets then [] else
         let retLoc = M.lookup Q.retVar crossVarLocs
@@ -127,7 +127,7 @@ fun blocks rets args name =
             , Memloc off : mls
             , off - 4))
         (M.empty, [], fromIntegral $ 4 * (1 + length args)) $ reverse args
-    crossVars = S.unions . map (snd . uncurry nextUses) $ blocks
+    crossVars = (S.insert Q.retVar) . S.unions . map (snd . uncurry nextUses) $ blocks
 
 -- Compute next Uses of each variable after each quad and set of vars alive at the beginning of block
 -- given the set of vars alive at the end of the block
@@ -155,6 +155,7 @@ nextUses qs aliveEnd = (reverse *** (M.keysSet . fst)) . flip runState start . f
     isCall = \case
         Q.Assign _ (Q.Call _ _) -> True
         Q.Exp (Q.Call _ _)      -> True
+        _                       -> False
 
     markCall :: M.Map Q.Var Use -> M.Map Q.Var Use
     markCall = M.map $ passesCall .~ True
@@ -220,10 +221,11 @@ quad ::
  -> Z ()
 quad q nextUses = case q of
     Q.Assign v (Q.BinInt v1 op v2) | op /= Q.Div && op /= Q.Mod -> do
-        let avs' = addAlive v2 avs
+        let avs' = considerDead (Q.Var v) avs
+            avs'' = if v1 == v2 then avs' else considerAlive v2 avs'
         when (alive avs v) $ do
-            r <- chooseRegister avs' $ Just v
-            whenM (dirtyReg avs' r) $ spill r
+            r <- chooseRegister avs'' $ Just v
+            whenM (dirtyReg avs'' r) $ spill avs' r
             unlessM ((== Just r) <$> getReg' v1) $ do
                 m <- locate v1
                 emit $ movl m (reg r)
@@ -238,13 +240,14 @@ quad q nextUses = case q of
         freeDesc v1
         freeDesc v2
     Q.Assign v (Q.BinInt v1 op v2) -> do
-        let avs' = addAlive v2 avs
+        let avs' = considerDead (Q.Var v) avs
+            avs'' = if v1 == v2 then avs' else considerAlive v2 avs'
         when (alive avs v) $ do
-            whenM (dirtyReg avs' eax) $ spill eax
+            whenM (dirtyReg avs'' eax) $ spill avs' eax
             unlessM ((== Just eax) <$> getReg' v1) $ do
                 m <- locate v1
                 emit $ movl m (reg eax)
-            whenM (dirtyReg avs' edx) $ spill edx
+            whenM (dirtyReg avs'' edx) $ spill avs' edx
             emit $ cdq
             m <- locate v2
             emit $ idivl m
@@ -270,20 +273,21 @@ quad q nextUses = case q of
             emit $ movl (con i) (mem m)
             setLoc ([m], Nothing) v
     Q.Assign v (Q.Call f as) -> do
-        call f as
+        let avs' = considerDead (Q.Var v) avs
+        call avs' f as
         when (alive avs v) $ do
             setVarsR [v] eax
             setLoc ([], Just eax) v
     Q.Jump l -> emit $ jmp l
     Q.Mark l -> emit $ label l
     Q.CondJump v1 op v2 l -> do
-        let avs' = addAlive v2 avs
+        let avs' = considerAlive v2 avs
         m1 <- locate v1
         m2 <- locate v2
         (m1, m2) <- case (m1, m2) of
             (AMem _, AMem _) -> do
                 r <- chooseRegister avs' (Just $ case v1 of Q.Var v -> v)
-                whenM (dirtyReg avs' r) $ spill r
+                whenM (dirtyReg avs' r) $ spill avs r
                 AMem m <- locate v1
                 emit $ movl (mem m) (reg r)
 
@@ -296,7 +300,7 @@ quad q nextUses = case q of
                 (reg r, ) <$> locate v2
             (AConst _, _) -> do
                 r <- chooseRegister avs' Nothing
-                whenM (dirtyReg avs' r) $ spill r
+                whenM (dirtyReg avs' r) $ spill avs r
                 emit $ movl m1 (reg r)
 
                 mapM_ (setReg Nothing) =<< getVarsR r
@@ -310,29 +314,35 @@ quad q nextUses = case q of
         emit $ jop op l
         freeDesc v1
         freeDesc v2
-    Q.Exp (Q.Call f as) -> call f as
+    Q.Exp (Q.Call f as) -> call avs f as
     Q.Exp _ -> pure ()
   where
-    call :: Q.Fun -> [Q.Arg] -> Z ()
-    call f as = do
-        forM_ (reverse as) $ \a -> locate a >>= (emit . pushl)
-        forM_ as $ freeDesc
-        mapM_ spill =<< filterM (dirtyReg avs) callerSaveRegs
-        emit $ calll f
-
     avs :: S.Set Q.Var
     avs = M.keysSet nextUses
 
     alive :: S.Set Q.Var -> Q.Var -> Bool
-    alive avs v = S.member v avs
+    alive = flip S.member
 
-    addAlive :: Q.Arg -> S.Set Q.Var -> S.Set Q.Var
-    addAlive (Q.Var v) = S.insert v
-    addAlive _         = id
+    considerAlive :: Q.Arg -> S.Set Q.Var -> S.Set Q.Var
+    considerAlive (Q.Var v) = S.insert v
+    considerAlive _         = id
 
-    spill :: Reg -> Z ()
-    spill r = do
-        m <- chooseMem =<< filterM (dirtyVar avs) =<< getVarsR r
+    considerDead :: Q.Arg -> S.Set Q.Var -> S.Set Q.Var
+    considerDead (Q.Var v) = S.delete v
+    considerDead _         = id
+
+    call :: S.Set Q.Var -> Q.Fun -> [Q.Arg] -> Z ()
+    call vs f as = do
+        forM_ (reverse as) $ \a -> locate a >>= (emit . pushl)
+        forM_ as $ freeDesc
+        mapM_ (spill avs) =<< filterM (dirtyReg vs) callerSaveRegs
+        emit $ calll f
+        emit $ addl (con $ fromIntegral $ 4 * length as) (reg esp)
+
+    spill :: S.Set Q.Var -> Reg -> Z ()
+    --       ^ When choosing memory, aim to put these vars in their final destinations
+    spill vs r = do
+        m <- chooseMem =<< filterM (dirtyVar vs) =<< getVarsR r
         emit $ movl (reg r) (mem m)
 
         mapM_ (delMem m) =<< getVarsM m
@@ -341,11 +351,12 @@ quad q nextUses = case q of
         mapM_ (\v -> addMem m v *> addVarM v m) =<< getVarsR r
 
     chooseRegister :: MonadState Desc m => S.Set Q.Var -> Maybe Q.Var -> m Reg
-    chooseRegister avs v = last <$> sortWithM (\r -> sequence
+    --                                     ^ These vars need to be saved
+    chooseRegister vs v = last <$> sortWithM (\r -> sequence
         [ fromEnum <$> isFree r
-        , fromEnum . not <$> dirtyReg avs r
+        , fromEnum . not <$> dirtyReg vs r
         , pure $ (\b -> (fromEnum . if b then id else not) (calleeSave r)) $ passesCall' v
-        , minimum . catMaybes . map getNextUse <$> getVarsR r
+        , minimum . (999999:) . catMaybes . map getNextUse <$> getVarsR r -- temporary solution...  I hope
         ]) generalRegs
 
     chooseMem :: [Q.Var] -> Z Memloc
@@ -362,10 +373,10 @@ quad q nextUses = case q of
                 ]) mems'
 
     dirtyReg :: MonadState Desc m => S.Set Q.Var -> Reg -> m Bool
-    dirtyReg avs r = getVarsR r >>= anyM (dirtyVar avs)
+    dirtyReg vs r = getVarsR r >>= anyM (dirtyVar vs)
 
     dirtyVar :: MonadState Desc m => S.Set Q.Var -> Q.Var -> m Bool
-    dirtyVar avs v = if not $ alive avs v then pure False else
+    dirtyVar vs v = if not $ alive vs v then pure False else
         null . fst . (\l -> assert (M.member v l) $ l M.! v) <$> use loc
 
     locate :: MonadState Desc m => Q.Arg -> m Arg
