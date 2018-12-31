@@ -8,8 +8,13 @@ import Prelude hiding (EQ, LT, GT)
 
 printFunDef :: FunDef -> String
 printFunDef (FunDef _ f vs qs) =
-    "define " <> f <> "(" <> (concat $ intersperse "," $ vs) <> ") {\n" <>
-        (concat $ intersperse "\n" $ map pQ qs) <> "\n}"
+    "define " <> f <> "(" <> pVars vs <> ") {\n" <> pQs qs <> "\n}"
+
+pVars :: [Var] -> String
+pVars = concat . intersperse ","
+
+pQs :: [Quad] -> String
+pQs = concat . intersperse "\n" . map pQ
 
 pQ :: Quad -> String
 pQ = \case

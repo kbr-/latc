@@ -34,7 +34,7 @@ newTemp :: GenQ String
 newTemp = temps <$> get >>= \t -> modify (\s -> s { temps = t + 1 }) *> pure ("t" <> show t)
 
 newLabel :: GenQ String
-newLabel = labels <$> get >>= \l -> modify (\s -> s { labels = l + 1 }) *> pure ("l" <> show l)
+newLabel = labels <$> get >>= \l -> modify (\s -> s { labels = l + 1 }) *> pure ("L" <> show l)
 
 expTemp :: Exp -> GenQ Var
 expTemp e = do
