@@ -12,12 +12,12 @@ import ParLatte
 import ErrM
 
 import Semantic.Program
-import Intermediate.Generate
+import qualified Intermediate.Generate as I
 import Intermediate.Flow
 import Intermediate.Liveness
 import qualified Quad as Q
 import PrintQuad
-import Asm.Generate
+import qualified Asm.Generate as A
 
 main :: IO ()
 main = do
@@ -31,14 +31,14 @@ main = do
     prog <- case maybeProg of
         Left errs -> putStrLn "ERROR" *> putStrLn (concat . intersperse "\n" $ errs) *> exitFailure
         Right x -> putStrLn "OK" *> pure x
-    forM_ prog $ \f -> do
-        let fd@(Q.FunDef rets name args qs) = generate f
-            cfg = mkGraph qs
-            bs = liveness rets cfg
-        putStrLn $ "fun " <> name <> "(" <> pVars args <> "):\n"
+    let Q.Program consts ds = I.program prog
+        ds' = flip map ds $ \(Q.FunDef rets name args qs) ->
+            A.FunDef (liveness rets $ mkGraph qs) rets name args
+    forM_ ds' $ \(A.FunDef bs rets name args) -> do
+        putStrLn $ "\nfun " <> name <> "(" <> pVars args <> "):"
         forM_ bs $ \(b, l) -> do
             putStrLn "{"
             putStrLn $ pQs b
-            putStrLn $ "}, live at end: " <> pVars (S.toList l)
-        putStrLn "asm:"
-        mapM_ putStrLn $ fun bs rets args name
+            putStrLn $ "}: " <> pVars (S.toList l)
+    putStrLn "\nasm:\n"
+    mapM_ putStrLn $ A.program consts ds'

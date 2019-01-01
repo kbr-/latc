@@ -1,6 +1,10 @@
 module Quad where
 
-data FunDef = FunDef Bool String [Var] [Quad]
+data Program = Program Consts [TopDef]
+
+type Consts = [(String, Label)]
+
+data TopDef = FunDef Bool String [Var] [Quad]
 
 data Quad
     = Assign Var Exp
@@ -11,15 +15,14 @@ data Quad
 
 data Exp
     = BinInt Arg BinOp Arg
-    | AddStr Arg Arg
+    | Load Label
     | Val Arg
     | Call Fun [Arg]
 
 type Var = String
 
 data Arg
-    = ConstS String
-    | ConstI Integer
+    = ConstI Integer
     | Var Var
     deriving Eq
 
@@ -32,7 +35,8 @@ data BinOp
     | Xor
     deriving Eq
 
-type Label = String
+newtype Label = Label { name :: String }
+    deriving (Eq, Ord)
 
 data RelOp
     = LT
@@ -47,5 +51,5 @@ type Fun = String
 retVar :: String
 retVar = "r"
 
-lRet :: Label
-lRet = "Lret"
+lRet :: Fun -> Label
+lRet f = Label $ "L" ++ f ++ "_ret"

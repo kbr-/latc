@@ -6,7 +6,7 @@ import Data.Monoid
 import Data.List
 import Prelude hiding (EQ, LT, GT)
 
-printFunDef :: FunDef -> String
+printFunDef :: TopDef -> String
 printFunDef (FunDef _ f vs qs) =
     "define " <> f <> "(" <> pVars vs <> ") {\n" <> pQs qs <> "\n}"
 
@@ -24,21 +24,20 @@ pQ = \case
 printQuad :: Quad -> String
 printQuad = \case
     Assign v e          -> v <> " = " <> printExp e
-    Jump l              -> "goto " <> l
-    Mark l              -> l <> ":"
-    CondJump a1 op a2 l -> "if " <> printArg a1 <> " " <> printRelOp op <> " " <> printArg a2 <> " goto " <> l
+    Jump l              -> "goto " <> name l
+    Mark l              -> name l <> ":"
+    CondJump a1 op a2 l -> "if " <> printArg a1 <> " " <> printRelOp op <> " " <> printArg a2 <> " goto " <> name l
     Exp e               -> printExp e
 
 printExp :: Exp -> String
 printExp = \case
     BinInt a1 op a2 -> printArg a1 <> " " <> printBinOp op <> " " <> printArg a2
-    AddStr a1 a2    -> printArg a1 <> " ++ " <> printArg a2
+    Load l          -> "load " <> name l
     Call f as       -> f <> "(" <> (concat $ intersperse "," $ map printArg as) <> ")"
     Val a           -> printArg a
 
 printArg :: Arg -> String
 printArg = \case
-    ConstS str -> str
     ConstI x   -> show x
     Var v      -> v
 

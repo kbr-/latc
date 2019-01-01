@@ -63,7 +63,7 @@ nextUses qs aliveEnd = (reverse *** (M.keysSet . fst)) . flip runState start . f
     vars :: Exp -> [Var]
     vars = \case
         BinInt a1 _ a2 -> vars' [a1, a2]
-        AddStr a1 a2   -> vars' [a1, a2]
+        Load _         -> []
         Val a          -> vars' [a]
         Call _ as      -> vars' as
 
