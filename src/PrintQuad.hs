@@ -11,10 +11,10 @@ printFunDef (FunDef _ f vs qs) =
     "define " <> f <> "(" <> pVars vs <> ") {\n" <> pQs qs <> "\n}"
 
 pVars :: [Var] -> String
-pVars = concat . intersperse ","
+pVars = intercalate ","
 
 pQs :: [Quad] -> String
-pQs = concat . intersperse "\n" . map pQ
+pQs = intercalate "\n" . map pQ
 
 pQ :: Quad -> String
 pQ = \case
@@ -33,7 +33,7 @@ printExp :: Exp -> String
 printExp = \case
     BinInt a1 op a2 -> printArg a1 <> " " <> printBinOp op <> " " <> printArg a2
     Load l          -> "load " <> name l
-    Call f as       -> f <> "(" <> (concat $ intersperse "," $ map printArg as) <> ")"
+    Call f as       -> f <> "(" <> (intercalate "," $ map printArg as) <> ")"
     Val a           -> printArg a
 
 printArg :: Arg -> String

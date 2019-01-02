@@ -1,7 +1,7 @@
 all: latc
 
 latc: bnfc
-	stack install latte:exe:latc --local-bin-path ./
+	stack install --local-bin-path ./
 
 .PHONY: bnfc
 bnfc:

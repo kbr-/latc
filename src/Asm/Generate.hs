@@ -77,9 +77,10 @@ data TopDef = FunDef
     }
 
 program :: Q.Consts -> [TopDef] -> [Entry]
-program consts ds = concatMap topDef ds <> constSection
+program consts ds = globlSection <> concatMap topDef ds <> constSection
   where
     topDef FunDef{..} = fun blocks rets args name
+    globlSection = [globl "main"]
     constSection = concatMap (\(s, l) -> [label l, asciz s]) consts
 
 fun :: [([Q.Quad], S.Set Q.Var)]
@@ -137,7 +138,7 @@ fun blocks rets args name =
             ( (if S.member v crossVars then M.insert v (Memloc off) else id) $ cvls
             , Memloc off : mls
             , off - 4))
-        (M.empty, [], fromIntegral $ 4 * (1 + length args)) $ reverse args
+        (M.empty, [], fromIntegral $ 4 * (1 + length args)) args
     crossVars = (S.insert Q.retVar) . S.unions . map (snd . uncurry nextUses) $ blocks
 
 block ::
@@ -168,15 +169,15 @@ quad ::
 --  ^ Use of each variable after this quad
  -> Z ()
 quad q nextUses = case q of
-    Q.Assign v (Q.BinInt v1 op v2) | op /= Q.Div && op /= Q.Mod -> do
+    Q.Assign v (Q.BinInt v1 op v2) | not $ elem op [Q.Div, Q.Mod] -> do
         let avs' = considerDead (Q.Var v) avs
             avs'' = if v1 == v2 then avs' else considerAlive v2 avs'
         when (alive avs v) $ do
-            r <- chooseRegister avs'' (Just v) $ case v1 of { Q.Var v' -> Just v'; _ -> Nothing }
+            r <- chooseRegister [] avs'' (Just v) $ case v1 of { Q.Var v' -> Just v'; _ -> Nothing }
             whenM (dirtyReg avs'' r) $ spill avs' r
             unlessM ((== Just r) <$> getReg' v1) $ do
                 m <- locate v1
-                emit $ movl m (reg r)
+                emitC (movl m (reg r)) $ P.printArg v1
             m <- locate v2
             emitC (oper op m (reg r)) $ P.printQuad q
 
@@ -194,10 +195,20 @@ quad q nextUses = case q of
             whenM (dirtyReg avs'' eax) $ spill avs' eax
             unlessM ((== Just eax) <$> getReg' v1) $ do
                 m <- locate v1
-                emit $ movl m (reg eax)
+                emitC (movl m (reg eax)) $ P.printArg v1
             whenM (dirtyReg avs'' edx) $ spill avs' edx
             emit $ cdq
-            m <- locate v2
+            m <- locate v2 >>= \case
+                m@(AConst _) -> do
+                    r <- chooseRegister [eax, edx] avs' Nothing Nothing
+                    whenM (dirtyReg avs' r) $ spill avs' r
+                    emit $ movl m (reg r)
+
+                    mapM_ (setReg Nothing) =<< getVarsR r
+                    setVarsR [] r
+
+                    pure $ reg r
+                m -> pure m
             emitC (idivl m) $ P.printQuad q
 
             mapM_ (setReg Nothing) =<< getVarsR eax
@@ -212,9 +223,9 @@ quad q nextUses = case q of
     Q.Assign v (Q.Load l) -> do
         let avs' = considerDead (Q.Var v) avs
         when (alive avs v) $ do
-            r <- chooseRegister avs' (Just v) Nothing
+            r <- chooseRegister [] avs' (Just v) Nothing
             whenM (dirtyReg avs' r) $ spill avs r
-            emit $ leal (lab l) (reg r)
+            emitC (leal (lab l) (reg r)) $ P.printArg (Q.Var v)
 
             mapM_ (setReg Nothing) =<< getVarsR r
             setVarsR [v] r
@@ -247,10 +258,10 @@ quad q nextUses = case q of
         m2 <- locate v2
         (m1, m2) <- case (m1, m2) of
             (AMem _, AMem _) -> do
-                r <- chooseRegister avs' (Just $ case v1 of Q.Var v -> v) Nothing
+                r <- chooseRegister [] avs' (Just $ case v1 of Q.Var v -> v) Nothing
                 whenM (dirtyReg avs' r) $ spill avs r
                 AMem m <- locate v1
-                emit $ movl (mem m) (reg r)
+                emitC (movl (mem m) (reg r)) $ P.printArg v1
 
                 mapM_ (setReg Nothing) =<< getVarsR r
                 setVarsR [] r
@@ -260,7 +271,7 @@ quad q nextUses = case q of
 
                 (reg r, ) <$> locate v2
             (AConst _, _) -> do
-                r <- chooseRegister avs' Nothing Nothing
+                r <- chooseRegister [] avs' Nothing Nothing
                 whenM (dirtyReg avs' r) $ spill avs r
                 emit $ movl m1 (reg r)
 
@@ -318,18 +329,19 @@ quad q nextUses = case q of
 
         mapM_ (\v -> addMem m v *> addVarM v m) =<< getVarsR r
 
-    chooseRegister :: S.Set Q.Var -> Maybe Q.Var -> Maybe Q.Var -> Z Reg
-    --                ^ These vars need to be saved
-    --                               ^ Optimize choice of register if this variable lives through a function call
-    --                                              ^ Optimize choice if this variable is already in reg
-    chooseRegister alives finalVar immediateVar =
+    chooseRegister :: [Reg] -> S.Set Q.Var -> Maybe Q.Var -> Maybe Q.Var -> Z Reg
+    --                ^ Exclude these registers
+    --                         ^ These vars need to be saved
+    --                                        ^ Optimize choice of register if this variable lives through a function call
+    --                                                       ^ Optimize choice if this variable is already in reg
+    chooseRegister exclude alives finalVar immediateVar =
         last <$> sortWithM (\r -> sequence
             [ fromEnum . not <$> dirtyReg alives r
             , fromEnum . (== Just r) <$> getReg'' immediateVar
             , fromEnum <$> isFree r
             , pure $ (\b -> (fromEnum . if b then id else not) (calleeSave r)) $ passesCall' finalVar
             , minimum . (999999:) . catMaybes . map getNextUse <$> getVarsR r -- temporary solution...  I hope
-            ]) generalRegs
+            ]) (generalRegs \\ exclude)
 
     chooseMem :: [Q.Var] -> Z Memloc
     --           ^ Prefer memory locations which are final destinations (after the block) of one of these vars
@@ -427,7 +439,7 @@ emit :: MonadWriter [Entry] m => Entry -> m ()
 emit = tell . pure
 
 emitC :: MonadWriter [Entry] m => Entry -> String -> m ()
-emitC e c = tell . pure $ e <> " ; " <> c
+emitC e c = tell . pure $ e <> " # " <> c
 
 getVarsR :: MonadState BlockSt m => Reg -> m [Q.Var]
 getVarsR r = use $ regVars . at r . non []
@@ -524,7 +536,7 @@ oper :: Q.BinOp -> Arg -> Arg -> Entry
 oper op = binOp (case op of
     Q.Plus  -> "addl"
     Q.Minus -> "subl"
-    Q.Times -> "mull"
+    Q.Times -> "imull"
     Q.Xor   -> "xorl")
 
 calll :: Q.Fun -> Entry
@@ -551,6 +563,9 @@ retl = "retl"
 
 asciz :: String -> Entry
 asciz s = ".asciz " <> s
+
+globl :: String -> Entry
+globl s = ".globl " <> s
 
 mem :: Memloc -> Arg
 mem = AMem
