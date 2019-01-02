@@ -49,7 +49,7 @@ newTemp :: Gen String
 newTemp = ("t" <>) . show <$> (temps <<+= 1)
 
 newLabel :: Gen Label
-newLabel = zoom progSt $ Label . ("L" <>) . show <$> (codeLabels <<+= 1)
+newLabel = zoom progSt $ Label . (".L" <>) . show <$> (codeLabels <<+= 1)
 
 getString :: String -> Gen Label
 getString s = zoom progSt $ do
