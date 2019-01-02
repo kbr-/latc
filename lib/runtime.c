@@ -16,15 +16,28 @@ void error() {
 }
 
 int readInt() {
-    int r;
+    int r = 0;
     scanf("%d", &r);
+    int c = getchar();
+    if (c != '\n') {
+        ungetc(c, stdin);
+    }
     return r;
 }
 
 char* readString() {
-    char* s = 0;
-    scanf("%m[^\n]", &s);
-    return s;
+    size_t size = 32;
+    char* s = malloc(size);
+    int c;
+    size_t len = 0;
+    while (EOF != (c = getchar()) && c != '\n') {
+        s[len++] = c;
+        if (len == size) {
+            s = realloc(s, size *= 2);
+        }
+    }
+    s[len++]='\0';
+    return realloc(s, len);
 }
 
 char* _concat(const char* s1, const char* s2) {

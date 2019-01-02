@@ -379,7 +379,7 @@ quad q nextUses = case q of
     newMem :: Z Memloc
     newMem = zoom funSt $ do
         m <- Memloc <$> use nextOffset
-        nextOffset += 4
+        nextOffset -= 4
         memLocs %= (m :)
         pure m
 
