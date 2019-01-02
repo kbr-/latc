@@ -172,7 +172,7 @@ quad q nextUses = case q of
         let avs' = considerDead (Q.Var v) avs
             avs'' = if v1 == v2 then avs' else considerAlive v2 avs'
         when (alive avs v) $ do
-            r <- chooseRegister avs'' $ Just v
+            r <- chooseRegister avs'' (Just v) $ case v1 of { Q.Var v' -> Just v'; _ -> Nothing }
             whenM (dirtyReg avs'' r) $ spill avs' r
             unlessM ((== Just r) <$> getReg' v1) $ do
                 m <- locate v1
@@ -212,7 +212,7 @@ quad q nextUses = case q of
     Q.Assign v (Q.Load l) -> do
         let avs' = considerDead (Q.Var v) avs
         when (alive avs v) $ do
-            r <- chooseRegister avs' $ Just v
+            r <- chooseRegister avs' (Just v) Nothing
             whenM (dirtyReg avs' r) $ spill avs r
             emit $ leal (lab l) (reg r)
 
@@ -247,7 +247,7 @@ quad q nextUses = case q of
         m2 <- locate v2
         (m1, m2) <- case (m1, m2) of
             (AMem _, AMem _) -> do
-                r <- chooseRegister avs' (Just $ case v1 of Q.Var v -> v)
+                r <- chooseRegister avs' (Just $ case v1 of Q.Var v -> v) Nothing
                 whenM (dirtyReg avs' r) $ spill avs r
                 AMem m <- locate v1
                 emit $ movl (mem m) (reg r)
@@ -260,7 +260,7 @@ quad q nextUses = case q of
 
                 (reg r, ) <$> locate v2
             (AConst _, _) -> do
-                r <- chooseRegister avs' Nothing
+                r <- chooseRegister avs' Nothing Nothing
                 whenM (dirtyReg avs' r) $ spill avs r
                 emit $ movl m1 (reg r)
 
@@ -318,15 +318,18 @@ quad q nextUses = case q of
 
         mapM_ (\v -> addMem m v *> addVarM v m) =<< getVarsR r
 
-    chooseRegister :: MonadState BlockSt m => S.Set Q.Var -> Maybe Q.Var -> m Reg
-    --                                     ^ These vars need to be saved
-    --                                                       ^ Optimize choice of register if this variable lives through a function call
-    chooseRegister vs v = last <$> sortWithM (\r -> sequence
-        [ fromEnum <$> isFree r
-        , fromEnum . not <$> dirtyReg vs r
-        , pure $ (\b -> (fromEnum . if b then id else not) (calleeSave r)) $ passesCall' v
-        , minimum . (999999:) . catMaybes . map getNextUse <$> getVarsR r -- temporary solution...  I hope
-        ]) generalRegs
+    chooseRegister :: S.Set Q.Var -> Maybe Q.Var -> Maybe Q.Var -> Z Reg
+    --                ^ These vars need to be saved
+    --                               ^ Optimize choice of register if this variable lives through a function call
+    --                                              ^ Optimize choice if this variable is already in reg
+    chooseRegister alives finalVar immediateVar =
+        last <$> sortWithM (\r -> sequence
+            [ fromEnum . not <$> dirtyReg alives r
+            , fromEnum . (== Just r) <$> getReg'' immediateVar
+            , fromEnum <$> isFree r
+            , pure $ (\b -> (fromEnum . if b then id else not) (calleeSave r)) $ passesCall' finalVar
+            , minimum . (999999:) . catMaybes . map getNextUse <$> getVarsR r -- temporary solution...  I hope
+            ]) generalRegs
 
     chooseMem :: [Q.Var] -> Z Memloc
     --           ^ Prefer memory locations which are final destinations (after the block) of one of these vars
@@ -341,12 +344,15 @@ quad q nextUses = case q of
                 , not . elem m . M.elems <$> reader endLoc
                 ]) mems'
 
+    -- dirtyVarsR :: MonadState BlockSt m => S.Set Q.Var -> Reg -> m [Q.Var]
+    -- dirtyVarsR vs r = getVarsR r >>= filterM (dirtyVar vs)
+
     dirtyReg :: MonadState BlockSt m => S.Set Q.Var -> Reg -> m Bool
     dirtyReg vs r = getVarsR r >>= anyM (dirtyVar vs)
 
     dirtyVar :: MonadState BlockSt m => S.Set Q.Var -> Q.Var -> m Bool
     dirtyVar vs v = if not $ alive vs v then pure False else
-        null . fst . (\l -> assert (M.member v l) $ l M.! v) <$> use loc
+        null . fst . (\l -> assert (isJust l) $ fromJust l) <$> (use $ loc . at v)
 
     locate :: MonadState BlockSt m => Q.Arg -> m Arg
     locate (Q.ConstI i) = pure $ AConst i
@@ -384,6 +390,10 @@ quad q nextUses = case q of
     passesCall' :: Maybe Q.Var -> Bool
     passesCall' (Just v) = nextUses ^? at v . _Just . passesCall ^. non False
     passesCall' Nothing  = False
+
+    getReg'' :: MonadState BlockSt m => Maybe Q.Var -> m (Maybe Reg)
+    getReg'' Nothing = pure Nothing
+    getReg'' (Just v) = getReg v
 
     getNextUse :: Q.Var -> Maybe Int
     getNextUse v = nextUses ^? at v . _Just . nextUse
