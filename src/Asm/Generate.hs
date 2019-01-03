@@ -33,7 +33,7 @@ newtype Reg = Reg { regName :: String }
 type Offset = Integer
 
 newtype Memloc = Memloc { offset :: Integer }
-    deriving (Eq, Ord)
+    deriving (Eq, Ord, Show)
 
 data Arg
     = AReg Reg
@@ -181,7 +181,15 @@ quad q nextUses = case q of
             m <- locate v2
             emitC (oper op m (reg r)) $ P.printQuad q
 
+            -- remove v from its previous locs
+            mapM_ (delVarR v) =<< getReg v
+            mapM_ (delVarM v) =<< getMems v
+
+            -- clear register r
             mapM_ (setReg Nothing) =<< getVarsR r
+            -- setVarsR [] r
+
+            -- set r's new contents and v's new loc
             setVarsR [v] r
             setLoc ([], Just r) v
 
@@ -211,11 +219,20 @@ quad q nextUses = case q of
                 m -> pure m
             emitC (idivl m) $ P.printQuad q
 
+            -- remove v from its previous locs
+            mapM_ (delVarR v) =<< getReg v
+            mapM_ (delVarM v) =<< getMems v
+
+            -- clear registers eax, edx
             mapM_ (setReg Nothing) =<< getVarsR eax
+            setVarsR [] eax
             mapM_ (setReg Nothing) =<< getVarsR edx
+            setVarsR [] edx
+
             let r = case op of
                         Q.Div -> eax
                         Q.Mod -> edx
+            -- set r's new contents and v's new loc
             setVarsR [v] r
             setLoc ([], Just r) v
         freeDesc v1
@@ -227,11 +244,24 @@ quad q nextUses = case q of
             whenM (dirtyReg avs' r) $ spill avs r
             emitC (leal (lab l) (reg r)) $ P.printArg (Q.Var v)
 
+            -- remove v from its previous locs
+            mapM_ (delVarR v) =<< getReg v
+            mapM_ (delVarM v) =<< getMems v
+
+            -- clear register r
             mapM_ (setReg Nothing) =<< getVarsR r
+            -- setVarsR [] r
+
+            -- set r's new contents and v's new loc
             setVarsR [v] r
             setLoc ([], Just r) v
     Q.Assign v (Q.Val (Q.Var v')) -> do
-        when (alive avs v) $ do
+        when (alive avs v && not (v == v')) $ do
+            -- remove v from its previous locs
+            mapM_ (delVarR v) =<< getReg v
+            mapM_ (delVarM v) =<< getMems v
+
+            -- add v to its new locs and set v's new loc
             mapM_ (addVarR v) =<< getReg v'
             mapM_ (addVarM v) =<< getMems v'
             flip setLoc v =<< getLoc v'
@@ -241,13 +271,26 @@ quad q nextUses = case q of
             m <- chooseMem [v]
             emitC (movl (con i) (mem m)) $ P.printQuad q
 
+            -- remove v from its previous locs
+            mapM_ (delVarR v) =<< getReg v
+            mapM_ (delVarM v) =<< getMems v
+
+            -- clear memloc m
             mapM_ (delMem m) =<< getVarsM m
+            -- setVarsM [] m
+
+            -- set m's new contents and v's new loc
             setVarsM [v] m
             setLoc ([m], Nothing) v
     Q.Assign v (Q.Call f as) -> do
         let avs' = considerDead (Q.Var v) avs
         call avs' f as
         when (alive avs v) $ do
+            -- remove v from its previous locs
+            mapM_ (delVarR v) =<< getReg v
+            mapM_ (delVarM v) =<< getMems v
+
+            -- set eax's new contents and v's new loc
             setVarsR [v] eax
             setLoc ([], Just eax) v
     Q.Jump l -> saveEndLoc *> emit (jmp l)
@@ -293,9 +336,6 @@ quad q nextUses = case q of
     avs :: S.Set Q.Var
     avs = M.keysSet nextUses
 
-    alive :: S.Set Q.Var -> Q.Var -> Bool
-    alive = flip S.member
-
     considerAlive :: Q.Arg -> S.Set Q.Var -> S.Set Q.Var
     considerAlive (Q.Var v) = S.insert v
     considerAlive _         = id
@@ -312,22 +352,11 @@ quad q nextUses = case q of
         forM_ as $ freeDesc
         mapM_ (spill vs) =<< filterM (dirtyReg vs) callerSaveRegs
         emit $ calll f
-        emit $ addl (con $ fromIntegral $ 4 * length as) (reg esp)
+        when (not $ null as) $
+            emit $ addl (con $ fromIntegral $ 4 * length as) (reg esp)
         forM_ callerSaveRegs $ \r -> do
             mapM_ (setReg Nothing) =<< getVarsR r
             setVarsR [] r
-
-    spill :: S.Set Q.Var -> Reg -> Z ()
-    --       ^ When choosing memory, aim to put these vars in their final destinations
-    spill vs r = do
-        dvs <- filterM (dirtyVar vs) =<< getVarsR r
-        m <- chooseMem dvs
-        emitC (movl (reg r) (mem m)) $ "save vars: " <> P.pVars dvs
-
-        mapM_ (delMem m) =<< getVarsM m
-        setVarsM [] m
-
-        mapM_ (\v -> addMem m v *> addVarM v m) =<< getVarsR r
 
     chooseRegister :: [Reg] -> S.Set Q.Var -> Maybe Q.Var -> Maybe Q.Var -> Z Reg
     --                ^ Exclude these registers
@@ -343,46 +372,6 @@ quad q nextUses = case q of
             , minimum . (999999:) . catMaybes . map getNextUse <$> getVarsR r -- temporary solution...  I hope
             ]) (generalRegs \\ exclude)
 
-    chooseMem :: [Q.Var] -> Z Memloc
-    --           ^ Prefer memory locations which are final destinations (after the block) of one of these vars
-    chooseMem vs = do
-        mems <- use $ funSt . memLocs
-        mems' <- filterM (\m -> getVarsM m >>= allM
-            (\v -> orM [any (/= m) <$> getMems v, isJust <$> getReg v])) mems
-        case mems' of
-            []    -> newMem
-            mems' -> last <$> sortWithM (\m -> sequence
-                [ anyM (\v -> andM [reachesEnd v, (== Just m) . M.lookup v <$> reader endLoc]) vs
-                , not . elem m . M.elems <$> reader endLoc
-                ]) mems'
-
-    -- dirtyVarsR :: MonadState BlockSt m => S.Set Q.Var -> Reg -> m [Q.Var]
-    -- dirtyVarsR vs r = getVarsR r >>= filterM (dirtyVar vs)
-
-    dirtyReg :: MonadState BlockSt m => S.Set Q.Var -> Reg -> m Bool
-    dirtyReg vs r = getVarsR r >>= anyM (dirtyVar vs)
-
-    dirtyVar :: MonadState BlockSt m => S.Set Q.Var -> Q.Var -> m Bool
-    dirtyVar vs v = if not $ alive vs v then pure False else
-        null . fst . (\l -> assert (isJust l) $ fromJust l) <$> (use $ loc . at v)
-
-    locate :: MonadState BlockSt m => Q.Arg -> m Arg
-    locate (Q.ConstI i) = pure $ AConst i
-    locate (Q.Var v) = getReg v >>= \case
-        Just r -> pure $ reg r
-        _      -> getMems v >>= \m -> assert (not $ null m) $ pure $ mem $ head m
-
-    reachesEnd :: MonadReader BlockEnv m => Q.Var -> m Bool
-    reachesEnd v = reader blockLen <&> \i ->
-        nextUses ^? at v . _Just . lastUse . to (== i + 1) ^. non False
-
-    newMem :: Z Memloc
-    newMem = zoom funSt $ do
-        m <- Memloc <$> use nextOffset
-        nextOffset -= 4
-        memLocs %= (m :)
-        pure m
-
     freeDesc :: MonadState BlockSt m => Q.Arg -> m ()
     freeDesc (Q.Var v) = unless (alive avs v) $ do
         mapM_ (delVarR v) =<< getReg v
@@ -392,9 +381,6 @@ quad q nextUses = case q of
 
     calleeSave :: Reg -> Bool
     calleeSave = flip elem [ebx, esi, edi]
-
-    callerSaveRegs :: [Reg]
-    callerSaveRegs = [eax, ecx, edx]
 
     save :: Reg -> Z ()
     save r = zoom funSt $ savedRegs %= S.insert r
@@ -413,33 +399,129 @@ quad q nextUses = case q of
 saveEndLoc :: Z ()
 saveEndLoc = do
     endLoc <- reader endLoc
+    let alives = M.keysSet endLoc
+    regs <- (callerSaveRegs <>) <$> getSavedRegs
+    regs' <- filterM (fmap not . dirtyReg alives) regs
+    r1 <- case regs' of
+        r:_ -> pure r
+        [] -> do
+            spill alives eax
+
+            mapM_ (setReg Nothing) =<< getVarsR eax
+            setVarsR [] eax
+
+            pure eax
+    let r2 = head $ regs \\ [r1]
+    juggle r2 r1
     flip M.traverseWithKey endLoc $ \v l -> do
         (ls, r) <- getLoc v
-        when (not (elem l ls) && isJust r) $ do
-            let r' = fromJust r
-            emitC (movl (reg $ r') (mem l)) $ "save " <> v <> " (end of block)"
-
-            mapM_ (delMem l) =<< getVarsM l
-            flip setVarsM l =<< getVarsR r'
-            setVarsR [] r'
-            setLoc (l : ls, Nothing) v
-    flip M.traverseWithKey endLoc $ \v l -> do
-        ls <- getMems v
-        when (not $ elem l ls) $ assert <$> isFree ecx <*> do
-            let l' = assert (not $ null ls) $ head ls
-            emit $ movl (mem l') (reg ecx)
-            emitC (movl (reg ecx) (mem l)) $ "save " <> v <> " (end of block)"
-
-            mapM_ (delMem l) =<< getVarsM l
-            flip setVarsM l =<< getVarsM l'
-            setLoc (l : ls, Nothing) v
+        assert (not (null ls) || isJust r) $ when (not $ elem l ls) $ do
+            r2 <- case r of
+                Nothing -> do
+                    let l' = head ls
+                    emit $ movl (mem l') (reg r2)
+                    mapM_ (\v -> setReg (Just r2) v *> addVarR v r2 *> delMem l' v) =<< getVarsM l'
+                    setVarsM [] l'
+                    pure r2
+                Just r -> pure r
+            juggle r2 r1
     pure ()
+  where
+    juggle :: Reg -> Reg -> Z ()
+    --        ^ Move a variable from this reg (if any) to its final destination (if it's not there)
+    juggle r1 r2 =
+        getVarsR r1 >>= varsToMove >>= \case
+            [] -> pure ()
+            (v,l):_ -> do
+                whenM (not . null <$> (varsToMove =<< getVarsM l)) $ do
+                    vs <- varsToMove =<< getVarsM l
+                    emit $ movl (mem l) (reg r2)
+                    mapM_ (\v -> setReg (Just r2) v *> addVarR v r2 *> delMem l v) =<< getVarsM l
+                    -- setVarsM [] l
+
+                emitC (movl (reg r1) (mem l)) $ "save " <> v <> " (end of block)"
+
+                vs <- getVarsR r1
+                setVarsM vs l
+                mapM_ (addMem l) vs
+
+                mapM_ (setReg Nothing) =<< getVarsR r1
+                setVarsR [] r1
+
+                juggle r2 r1
+
+    varsToMove :: [Q.Var] -> Z [(Q.Var, Memloc)]
+    varsToMove = filterM (\(v,l) -> not . elem l <$> getMems v) <=< mapM (\v -> (v, ) <$> getEndLoc v)
+
+    getEndLoc :: Q.Var -> Z Memloc
+    getEndLoc v = reader endLoc <&> \el -> let l = el ^. at v in assert (isJust l) $ fromJust l
+
+    getSavedRegs :: Z [Reg]
+    getSavedRegs = zoom funSt $ use $ savedRegs . to S.toList
 
 emit :: MonadWriter [Entry] m => Entry -> m ()
 emit = tell . pure
 
 emitC :: MonadWriter [Entry] m => Entry -> String -> m ()
 emitC e c = tell . pure $ e <> " # " <> c
+
+callerSaveRegs :: [Reg]
+callerSaveRegs = [eax, ecx, edx]
+
+-- dirtyVarsR :: MonadState BlockSt m => S.Set Q.Var -> Reg -> m [Q.Var]
+-- dirtyVarsR vs r = getVarsR r >>= filterM (dirtyVar vs)
+
+spill :: S.Set Q.Var -> Reg -> Z ()
+--       ^ When choosing memory, aim to put these vars in their final destinations
+spill vs r = do
+    dvs <- filterM (dirtyVar vs) =<< getVarsR r
+    m <- chooseMem dvs
+    emitC (movl (reg r) (mem m)) $ "save vars: " <> P.pVars dvs
+
+    mapM_ (delMem m) =<< getVarsM m
+    setVarsM [] m
+
+    mapM_ (\v -> addMem m v *> addVarM v m) =<< getVarsR r
+
+chooseMem :: [Q.Var] -> Z Memloc
+--           ^ Prefer memory locations which are final destinations (after the block) of one of these vars
+chooseMem vs = do
+    mems <- use $ funSt . memLocs
+    mems' <- filterM (\m -> getVarsM m >>= allM
+        (\v -> orM [any (/= m) <$> getMems v, isJust <$> getReg v])) mems
+    case mems' of
+        []    -> newMem
+        mems' -> last <$> sortWithM (\m -> sequence
+            [ anyM (\v -> andM [{-reachesEnd v, -}(== Just m) . M.lookup v <$> reader endLoc]) vs
+            , not . elem m . M.elems <$> reader endLoc
+            ]) mems'
+
+-- reachesEnd :: MonadReader BlockEnv m => Q.Var -> m Bool
+-- reachesEnd v = reader blockLen <&> \i ->
+--     nextUses ^? at v . _Just . lastUse . to (== i + 1) ^. non False
+
+newMem :: Z Memloc
+newMem = zoom funSt $ do
+    m <- Memloc <$> use nextOffset
+    nextOffset -= 4
+    memLocs %= (m :)
+    pure m
+
+locate :: MonadState BlockSt m => Q.Arg -> m Arg
+locate (Q.ConstI i) = pure $ AConst i
+locate (Q.Var v) = getReg v >>= \case
+    Just r -> pure $ reg r
+    _      -> getMems v >>= \m -> assert (not $ null m) $ pure $ mem $ head m
+
+dirtyVar :: MonadState BlockSt m => S.Set Q.Var -> Q.Var -> m Bool
+dirtyVar alives v = if not $ alive alives v then pure False else
+    null . fst . (\l -> assert (isJust l) $ fromJust l) <$> (use $ loc . at v)
+
+dirtyReg :: MonadState BlockSt m => S.Set Q.Var -> Reg -> m Bool
+dirtyReg alives r = getVarsR r >>= anyM (dirtyVar alives)
+
+alive :: S.Set Q.Var -> Q.Var -> Bool
+alive = flip S.member
 
 getVarsR :: MonadState BlockSt m => Reg -> m [Q.Var]
 getVarsR r = use $ regVars . at r . non []
@@ -464,6 +546,11 @@ setVarsM vs m = memVars %= M.insert m vs
 
 delVarM :: MonadState BlockSt m => Q.Var -> Memloc -> m ()
 delVarM v m = memVars . ix m %= delete v
+
+getVars :: MonadState BlockSt m => Arg -> m [Q.Var]
+getVars (AReg r) = getVarsR r
+getVars (AMem m) = getVarsM m
+getVars _ = pure []
 
 getReg' :: MonadState BlockSt m => Q.Arg -> m (Maybe Reg)
 getReg' (Q.Var v) = getReg v
