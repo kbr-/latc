@@ -126,7 +126,7 @@ fun blocks rets args name =
     <> map (pushl . reg) savedRegs
     <> code
     <> retValCode
-    <> map (popl . reg) savedRegs
+    <> map (popl . reg) (reverse savedRegs)
     <>
     [ addl (con memSize) (reg esp)
     , popl (reg ebp)
@@ -467,8 +467,8 @@ emitC e c = tell . pure $ e <> " # " <> c
 callerSaveRegs :: [Reg]
 callerSaveRegs = [eax, ecx, edx]
 
--- dirtyVarsR :: MonadState BlockSt m => S.Set Q.Var -> Reg -> m [Q.Var]
--- dirtyVarsR vs r = getVars r >>= filterM (dirtyVar vs)
+-- dirtyVars :: (MonadState BlockSt m, IsLoc a) => S.Set Q.Var -> a -> m [Q.Var]
+-- dirtyVars vs r = getVars r >>= filterM (dirtyVar vs)
 
 spill :: S.Set Q.Var -> Reg -> Z ()
 --       ^ When choosing memory, aim to put these vars in their final destinations
