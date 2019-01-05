@@ -2,9 +2,11 @@
 {-# LANGUAGE RecordWildCards #-}
 module Intermediate.Flow where
 
+import Data.List (nub)
 import Control.Exception
 import qualified Data.Map as M
 
+import Common
 import Quad
 
 data Graph a = Graph
@@ -21,10 +23,13 @@ mkGraph qs = Graph{..}
     vertices = splitBlocks qs
     edges = edges' vertices
 
-splitBlocks :: [Quad] -> [[Quad]]
+mapGraph :: (a -> b) -> Graph a -> Graph b
+mapGraph f Graph{..} = Graph (map f vertices) edges
+
+splitBlocks :: [Quad] -> [Block]
 splitBlocks qs = reverse . map reverse . fst . foldl step ([[]], False) $ qs
   where
-    step :: ([[Quad]], Bool) -> Quad -> ([[Quad]], Bool)
+    step :: ([Block], Bool) -> Quad -> ([Block], Bool)
     step (b:t, jumped) q = (if jumped || jumpedTo q then [q]:b:t else (q:b):t, isJump q)
 
     isJump = \case
@@ -41,29 +46,30 @@ splitBlocks qs = reverse . map reverse . fst . foldl step ([[]], False) $ qs
         CondJump _ _ _ l -> True
         _                -> False
 
-edges' :: [[Quad]] -> [[Int]]
+incoming :: [[Int]] -> [[Int]]
+incoming edges = map ((\i -> map fst . filter (\(_, es) -> elem i es) $ ies) . fst) ies
+  where ies = indexed edges
+
+edges' :: [Block] -> [[Int]]
 edges' bs = map dests ibs
   where
-    dests :: ([Quad], Int) -> [Int]
-    dests (b, i) = (if i < cnt - 1 then ((i+1) :) else id) $ jumpDests b
-
-    jumpDests :: [Quad] -> [Int]
-    jumpDests b = case assert (not $ null b) $ last b of
+    dests :: (Int, Block) -> [Int]
+    dests (i, b) = case assert (not $ null b) $ last b of
         Jump l           -> [labelIx l]
-        CondJump _ _ _ l -> [labelIx l]
-        _                -> []
+        CondJump _ _ _ l -> nub $ (if i < cnt - 1 then ((i+1) :) else id) [labelIx l]
+        _                -> if i < cnt - 1 then [i + 1] else []
 
     labelIx :: Label -> Int
     labelIx l = assert (M.member l labels) $ labels M.! l
 
     labels :: M.Map Label Int
-    labels = foldr (\(b, i) m ->
+    labels = foldr (\(i, b) m ->
         case assert (not $ null b) $ head b of
             Mark l -> M.insert l i m
             _      -> m) M.empty ibs
 
-    ibs :: [([Quad], Int)]
-    ibs = reverse . fst . foldl (\(xs, i) x -> ((x,i):xs, i+1)) ([], 0) $ bs
+    ibs :: [(Int, Block)]
+    ibs = indexed bs
 
     cnt :: Int
     cnt = length bs

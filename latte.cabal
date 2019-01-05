@@ -25,7 +25,10 @@ library
                        Intermediate.Generate,
                        Intermediate.Flow,
                        Intermediate.Liveness,
-                       Asm.Generate
+                       Intermediate.Reaching,
+                       Intermediate.CSE,
+                       Asm.Generate,
+                       Common
   build-depends:       base >= 4.7 && < 5,
                        containers, array, mtl, transformers, extra, lens
   hs-source-dirs:      src, src/bnfc

@@ -12,19 +12,21 @@ data Quad
     | Mark Label
     | CondJump Arg RelOp Arg Label
     | Exp Exp
+    deriving Eq
 
 data Exp
     = BinInt Arg BinOp Arg
     | Load Label
     | Val Arg
     | Call Fun [Arg]
+    deriving (Eq, Ord)
 
 type Var = String
 
 data Arg
     = ConstI Integer
     | Var Var
-    deriving Eq
+    deriving (Eq, Ord)
 
 data BinOp
     = Plus
@@ -33,7 +35,7 @@ data BinOp
     | Div
     | Mod
     | Xor
-    deriving Eq
+    deriving (Eq, Ord)
 
 newtype Label = Label { name :: String }
     deriving (Eq, Ord)
@@ -45,6 +47,7 @@ data RelOp
     | GE
     | EQ
     | NE
+    deriving Eq
 
 type Fun = String
 

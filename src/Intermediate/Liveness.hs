@@ -11,6 +11,7 @@ import Control.Monad.State.Strict
 import qualified Data.Map as M
 import qualified Data.Set as S
 
+import Common
 import Quad
 import Intermediate.Flow
 
@@ -22,10 +23,9 @@ data Use = Use
 
 makeLenses ''Use
 
-liveness :: Bool -> Graph Block -> [(Block, S.Set Var)]
-liveness rets Graph{..} = zip vertices $ fixed step start
+liveness :: Bool -> Graph Block -> [S.Set Var]
+liveness rets Graph{..} = fixed step start
   where
-    fixed f = head . dropWhile (\x -> x /= f x) . iterate f
     start = map (const S.empty) (init vertices) ++ [if rets then S.singleton retVar else S.empty]
     step aliveEnds =
         let aliveBegin = map (snd . uncurry nextUses) $ zip vertices aliveEnds
@@ -59,18 +59,6 @@ nextUses qs aliveEnd = (reverse *** (M.keysSet . fst)) . flip runState start . f
 
     markCall :: M.Map Var Use -> M.Map Var Use
     markCall = M.map $ passesCall .~ True
-
-    vars :: Exp -> [Var]
-    vars = \case
-        BinInt a1 _ a2 -> vars' [a1, a2]
-        Load _         -> []
-        Val a          -> vars' [a]
-        Call _ as      -> vars' as
-
-    vars' :: [Arg] -> [Var]
-    vars' = concatMap $ \case
-        Var v -> [v]
-        _       -> []
 
     start :: (M.Map Var Use, Int)
     start = (M.fromSet (const $ Use (cnt + 1) (cnt + 1) False) aliveEnd, cnt)
