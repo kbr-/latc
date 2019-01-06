@@ -26,7 +26,8 @@ printIntermediateFun :: [Defs] -> [S.Set Q.Var] -> String -> [Q.Var] -> [Block] 
 printIntermediateFun reachingBegins aliveEnds name args blocks = do
     putStrLn $ "\nfun " <> name <> "(" <> pVars args <> "):"
     sequence_ $ zipWith3 (\ds as b -> do
-        putStrLn $ "{: " <> printDefs ds
+        putStrLn $ "{"
+        --putStrLn $ "{: " <> printDefs ds
         putStrLn $ pQs b
         putStrLn $ "}: " <> pVars (S.toList as)) reachingBegins aliveEnds blocks
   where
@@ -51,7 +52,7 @@ main = do
 
     let bss' = zipWith (\g defs -> eliminate $ Graph (zip (vertices g) defs) (edges g)) graphs defss
         graphs' = zipWith (\g bs -> Graph bs (edges g)) graphs bss'
-        alivess' = zipWith liveness retss graphs
+        alivess' = zipWith liveness retss graphs'
     putStrLn "\nafter CSE:\n"
     sequence_ $ zipWith5 printIntermediateFun defss alivess' names argss bss'
 

@@ -36,7 +36,8 @@ eliminate Graph{..} = map fst $ fixed step start
                 ds = (defs !! i) ^. at v . non []
                 d = assert (not $ null ds) $ head ds
             guard $ null $ tail ds
-            assert (bs !! fst d !! snd d == Assign v e) $ pure v
+            guard $ bs !! fst d !! snd d == Assign v e
+            pure v
          of Nothing -> id
             Just v  -> insert v e
         ) empty $ M.keys $ M.unions $ map (heldIn . (css !!)) $ sources
