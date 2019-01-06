@@ -4,6 +4,7 @@
 module Intermediate.CSE where
 
 import Data.Maybe
+import Data.List ((\\))
 import Control.Lens
 import Control.Exception
 import Control.Monad.State.Strict
@@ -16,7 +17,8 @@ import Intermediate.Flow
 import Intermediate.Reaching (Def, Defs)
 
 data CS = CS
-    { heldIn :: M.Map Exp Var
+    { holds  :: M.Map Var Exp
+    , heldIn :: M.Map Exp Var
     , occurs :: M.Map Var [Exp]
     }
     deriving Eq
@@ -45,7 +47,7 @@ eliminate Graph{..} = map fst $ fixed step start
     ies = incoming edges
 
 empty :: CS
-empty = CS M.empty M.empty
+empty = CS M.empty M.empty M.empty
 
 eliminateBlock :: Block -> CS -> (Block, CS)
 eliminateBlock qs = runState $ mapM (\q -> state $ update q) qs
@@ -58,17 +60,20 @@ update q@(Assign v e@(BinInt _ _ _)) cs@CS{..} = (q', cs')
              | isJust curr || elem v (vars e) -> delete v cs
              | otherwise                      -> insert v e . delete v $ cs
     curr = heldIn ^. at e
-
+update q@(Assign v _) cs = (q, delete v cs)
 update q cs = (q, cs)
 
 delete :: Var -> CS -> CS
-delete v CS{..} = CS heldIn' occurs'
+delete v CS{..} = CS holds' heldIn' occurs'
   where
-    heldIn' = foldr M.delete heldIn $ occurs ^. at v . non []
-    occurs' = M.delete v occurs
+    holds'  = M.delete v holds
+    heldIn' = foldr M.delete heldIn $ occurs ^. at v . non [] ++ heldInV
+    occurs' = foldr (\x -> ix x %~ (\\ heldInV)) (M.delete v occurs) $ concatMap vars heldInV
+    heldInV = catMaybes $ [holds ^. at v]
 
 insert :: Var -> Exp -> CS -> CS
-insert v e CS{..} = CS heldIn' occurs'
+insert v e CS{..} = CS holds' heldIn' occurs'
   where
+    holds'  = M.insert v e holds
     heldIn' = M.insert e v heldIn
     occurs' = foldr (\x o -> o & at x . non [] %~ (e :)) occurs $ vars e

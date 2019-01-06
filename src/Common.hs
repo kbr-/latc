@@ -4,7 +4,7 @@ module Common where
 import Quad
 
 indexed :: [a] -> [(Int, a)]
-indexed = reverse . fst . foldl (\(xs, i) x -> ((i,x):xs, i+1)) ([], 0)
+indexed = zip [0..]
 
 fixed :: Eq a => (a -> a) -> a -> a
 fixed f = head . dropWhile (\x -> x /= f x) . iterate f
