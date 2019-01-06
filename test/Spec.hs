@@ -8,6 +8,7 @@ import System.FilePath
 import System.IO.Temp
 import System.Exit
 import System.Timeout
+import Debug.Trace
 
 import Data.Maybe
 import Data.List
@@ -25,6 +26,8 @@ import qualified Quad as Q
 import qualified Asm.Generate as A
 import Intermediate.Flow
 import Intermediate.Liveness
+import Intermediate.Reaching
+import Intermediate.CSE
 
 main :: IO ()
 main = hspec $
@@ -54,17 +57,20 @@ instance Show Expr where
     show = \case
         Op a op b    -> "(" ++ show a ++ " " ++ pOp op ++ " " ++ show b ++ ")"
         Var (Name v) -> v
-        Const x      -> show x
+        Const x      -> if x < 0 then "(" ++ show x ++ ")" else show x
 
 expr :: Int -> Gen Expr
-expr 0 = oneof $ [Const <$> arbitrary, Var <$> arbitrary]
+expr 0 = oneof $ [genInt, Var <$> arbitrary]
 expr n | n > 0 = frequency $
-    [ (4, Op    <$> subexpr <*> arbitrary <*> subexpr)
-    , (2, Const <$> arbitrary)
-    , (1, Var   <$> arbitrary)
+    [ (10, Op    <$> subexpr <*> arbitrary <*> subexpr)
+    , (2, genInt)
+    , (2, Var   <$> arbitrary)
     ]
   where
     subexpr = expr (n - 1)
+
+genInt :: Gen Expr
+genInt = (\i -> if i < 0 then Op (Const 0) Minus (Const i) else (Const i)) <$> arbitrary
 
 genVals :: [Name] -> Gen [(Name, Int)]
 genVals = mapM (\v -> (v, ) <$> arbitrary)
@@ -151,9 +157,30 @@ compile :: T.Program Pos -> Either String String
 compile p = do
     prog <- left (intercalate "\n") $ S.runProgram p
     let Q.Program consts ds = I.program prog
-        ds' = flip map ds $ \(Q.FunDef rets name args qs) ->
-            A.FunDef (liveness rets $ mkGraph qs) rets name args
-        asm = A.program consts ds'
+        (retss, names, argss, qss) = unzip4 $ flip map ds $ \(Q.FunDef rets name args qs) -> (rets, name, args, qs)
+        graphs = map mkGraph qss
+        bss = map vertices graphs
+        alivess = zipWith liveness retss graphs
+
+    let ads = zipWith4 A.FunDef (zipWith zip bss alivess) retss names argss
+        asm = A.program consts ads
+    pure $ intercalate "\n" asm ++ "\n"
+
+compile' p = do
+    prog <- left (intercalate "\n") $ S.runProgram p
+    let Q.Program consts ds = I.program prog
+        (retss, names, argss, qss) = unzip4 $ flip map ds $ \(Q.FunDef rets name args qs) -> (rets, name, args, qs)
+        graphs = map mkGraph qss
+        bss = map vertices graphs
+        alivess = zipWith liveness retss graphs
+        defss = map reaching graphs
+
+    let bss' = zipWith (\g defs -> eliminate $ Graph (zip (vertices g) defs) (edges g)) graphs defss
+        graphs' = zipWith (\g bs -> Graph bs (edges g)) graphs bss'
+        alivess' = zipWith liveness retss graphs'
+
+    let ads = zipWith4 A.FunDef (zipWith zip bss' alivess') retss names argss
+        asm = A.program consts ads
     pure $ intercalate "\n" asm ++ "\n"
 
 runCode :: String -> IO String
@@ -184,6 +211,7 @@ prop_CalcExpr e =
     forAll (genVals $ vars e) $ \vs ->
     not (hasDivideByZero e vs) && depth e > 1 ==>
     monadicIO $ do
+        --traceM $ "testing expr: " ++ show e
         code <- case compile $ simpleProgram e vs of
             Left err -> fail err
             Right c -> pure c
@@ -191,6 +219,13 @@ prop_CalcExpr e =
         let out' = readMaybe out
             ev = eval e vs
         assert $ out' == Just ev
+
+        code <- case compile' $ simpleProgram e vs of
+            Left err -> fail err
+            Right c -> pure c
+        out <- run $ runCode code
+        let out'' = readMaybe out
+        assert $ out' == out''
 
 at :: Eq a => [(a, b)] -> a -> b
 at l i = fromJust $ lookup i l

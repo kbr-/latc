@@ -186,10 +186,10 @@ block qs aliveBegin aliveEnd = do
     tell code
     put s
 
---deb :: Z ()
---deb = do
---   BlockSt{..} <- get
---   traceM $ "desc:\n" <> "loc:\n" <> show _loc <> "\nregVars:\n" <> show _regVars <> "\nmemVars:\n" <> show _memVars <> "\n"
+deb :: Z ()
+deb = do
+   BlockSt{..} <- get
+   traceM $ "desc:\n" <> "loc:\n" <> show _loc <> "\nregVars:\n" <> show _regVars <> "\nmemVars:\n" <> show _memVars <> "\n"
 
 quad ::
     Q.Quad
@@ -207,11 +207,11 @@ quad q nextUses = case q of
             unlessM ((== Just r) <$> getReg' v1) $ do
                 m <- locate v1
                 emitC (movl m (reg r)) $ P.printArg v1
-            m <- locate v2
+            clear r
+            m <- if v1 == v2 then pure $ reg r else locate v2
 
             emitC (oper op m (reg r)) $ P.printQuad q
             remove v
-            clear r
             addVar v r
 
             when (calleeSave r) $ save r

@@ -22,14 +22,16 @@ import Intermediate.CSE
 
 import Intermediate.Reaching
 
-printIntermediateFun :: [Defs] -> [S.Set Q.Var] -> String -> [Q.Var] -> [Block] -> IO ()
-printIntermediateFun reachingBegins aliveEnds name args blocks = do
-    putStrLn $ "\nfun " <> name <> "(" <> pVars args <> "):"
-    sequence_ $ zipWith3 (\ds as b -> do
-        putStrLn $ "{"
-        --putStrLn $ "{: " <> printDefs ds
-        putStrLn $ pQs b
-        putStrLn $ "}: " <> pVars (S.toList as)) reachingBegins aliveEnds blocks
+printIntermediateFun :: [Defs] -> [S.Set Q.Var] -> String -> [Q.Var] -> [Block] -> String
+printIntermediateFun reachingBegins aliveEnds name args blocks = intercalate "\n" $
+    [ "fun " <> name <> "(" <> pVars args <> "):"
+    , intercalate "\n" $ zipWith3 (\ds as b -> intercalate "\n" $
+        [ "{"
+        --, "{: " <> printDefs ds
+        , pQs b
+        , "}: " <> pVars (S.toList as)
+        ]) reachingBegins aliveEnds blocks
+    ]
   where
     printDefs :: Defs -> String
     printDefs = intercalate ", " . map (\(k, v) -> k <> " <- " <> show v) . M.assocs
@@ -47,22 +49,25 @@ main = do
         bss = map vertices graphs
         alivess = zipWith liveness retss graphs
         defss = map reaching graphs
-    putStrLn "Intermediate code before CSE:\n"
-    sequence_ $ zipWith5 printIntermediateFun defss alivess names argss bss
+        preCSE = intercalate "\n\n" $ zipWith5 printIntermediateFun defss alivess names argss bss
 
     let bss' = zipWith (\g defs -> eliminate $ Graph (zip (vertices g) defs) (edges g)) graphs defss
         graphs' = zipWith (\g bs -> Graph bs (edges g)) graphs bss'
         alivess' = zipWith liveness retss graphs'
-    putStrLn "\nafter CSE:\n"
-    sequence_ $ zipWith5 printIntermediateFun defss alivess' names argss bss'
+        postCSE = intercalate "\n\n" $ zipWith5 printIntermediateFun defss alivess' names argss bss'
 
     let ads = zipWith4 A.FunDef (zipWith zip bss' alivess') retss names argss
+    --let ads = zipWith4 A.FunDef (zipWith zip bss alivess) retss names argss
         asm = A.program consts ads
-    forM_ asm putStrLn
+    --forM_ asm putStrLn
 
     let execFilePath = dropExtension filePath
+        intPreCSEPath = execFilePath <> "_preCSE.q"
+        intPostCSEPath = execFilePath <> "_postCSE.q"
         objFilePath = execFilePath <> ".o"
         asmFilePath = execFilePath <> ".s"
+    writeFile intPreCSEPath preCSE
+    writeFile intPostCSEPath postCSE
     writeFile asmFilePath $ intercalate "\n" asm <> "\n"
     runAs asmFilePath objFilePath
     runLd objFilePath execFilePath
