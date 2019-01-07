@@ -10,31 +10,24 @@ import Data.List
 import qualified Data.Set as S
 import qualified Data.Map as M
 
+import PrintQuad
+import Frontend
 import Semantic.Program
-import qualified Intermediate.Generate as I
 import Intermediate.Flow
 import Intermediate.Liveness
 import qualified Quad as Q
-import PrintQuad
+import qualified Intermediate.Generate as I
 import qualified Asm.Generate as A
-import Frontend
-import Intermediate.CSE
 
-import Intermediate.Reaching
-
-printIntermediateFun :: [Defs] -> [S.Set Q.Var] -> String -> [Q.Var] -> [Block] -> String
-printIntermediateFun reachingBegins aliveEnds name args blocks = intercalate "\n" $
+printIntermediateFun :: [S.Set Q.Var] -> String -> [Q.Var] -> [Block] -> String
+printIntermediateFun aliveEnds name args blocks = intercalate "\n" $
     [ "fun " <> name <> "(" <> pVars args <> "):"
-    , intercalate "\n" $ zipWith3 (\ds as b -> intercalate "\n" $
+    , intercalate "\n" $ zipWith (\as b -> intercalate "\n" $
         [ "{"
-        --, "{: " <> printDefs ds
         , pQs b
         , "}: " <> pVars (S.toList as)
-        ]) reachingBegins aliveEnds blocks
+        ]) aliveEnds blocks
     ]
-  where
-    printDefs :: Defs -> String
-    printDefs = intercalate ", " . map (\(k, v) -> k <> " <- " <> show v) . M.assocs
 
 main :: IO ()
 main = do
@@ -43,32 +36,24 @@ main = do
         inFile:_ -> (,) <$> readFile inFile <*> pure inFile
         _        -> putStrLn "Usage: latc_x86 <file>" *> exitFailure
     prog <- frontend code
+
     let Q.Program consts ds = I.program prog
+
         (retss, names, argss, qss) = unzip4 $ flip map ds $ \(Q.FunDef rets name args qs) -> (rets, name, args, qs)
         graphs = map mkGraph qss
         bss = map vertices graphs
         alivess = zipWith liveness retss graphs
-        defss = map reaching graphs
-        preCSE = intercalate "\n\n" $ zipWith5 printIntermediateFun defss alivess names argss bss
 
-    let bss' = zipWith (\g defs -> eliminate $ Graph (zip (vertices g) defs) (edges g)) graphs defss
-        graphs' = zipWith (\g bs -> Graph bs (edges g)) graphs bss'
-        alivess' = zipWith liveness retss graphs'
-        postCSE = intercalate "\n\n" $ zipWith5 printIntermediateFun defss alivess' names argss bss'
-
-    let ads = zipWith4 A.FunDef (zipWith zip bss' alivess') retss names argss
-    --let ads = zipWith4 A.FunDef (zipWith zip bss alivess) retss names argss
-        asm = A.program consts ads
-    --forM_ asm putStrLn
+        ads = zipWith4 A.FunDef (zipWith zip bss alivess) retss names argss
+        quads = intercalate "\n\n" $ zipWith4 printIntermediateFun alivess names argss bss
+        asm = intercalate "\n" (A.program consts ads) <> "\n"
 
     let execFilePath = dropExtension filePath
-        intPreCSEPath = execFilePath <> "_preCSE.q"
-        intPostCSEPath = execFilePath <> "_postCSE.q"
+        intFilePath = execFilePath <> ".q"
         objFilePath = execFilePath <> ".o"
         asmFilePath = execFilePath <> ".s"
-    writeFile intPreCSEPath preCSE
-    writeFile intPostCSEPath postCSE
-    writeFile asmFilePath $ intercalate "\n" asm <> "\n"
+    writeFile intFilePath quads
+    writeFile asmFilePath asm
     runAs asmFilePath objFilePath
     runLd objFilePath execFilePath
 
