@@ -129,6 +129,7 @@ alwaysReturns (AT.While e _) =
     case tryEvalBool e of
         Just True -> True -- actually infinite loop
         _         -> False
+alwaysReturns (AT.SExp (AT.EApp "error" [])) = True
 alwaysReturns _ = False
 
 tryEvalBool :: AT.Expr -> Maybe Bool
