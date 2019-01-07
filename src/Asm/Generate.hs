@@ -197,7 +197,7 @@ quad ::
  -> M.Map Q.Var Use
 --  ^ Use of each variable after this quad
  -> Z ()
-quad q nextUses = case q of
+quad q nextUses = {- deb <* traceM ("quad: " ++ P.printQuad q) <* -}case q of
     Q.Assign v (Q.BinInt v1 op v2) | not $ elem op [Q.Div, Q.Mod] -> do
         let avs' = considerDead (Q.Var v) avs
             avs'' = if v1 == v2 then avs' else considerAlive v2 avs'
@@ -477,7 +477,7 @@ spill vs r = do
     m <- chooseMem dvs
 
     emitC (movl (reg r) (mem m)) $ "save vars: " <> P.pVars dvs
-    copy r m
+    move r m
 
 chooseMem :: [Q.Var] -> Z Memloc
 --           ^ Prefer memory locations which are final destinations (after the block) of one of these vars
