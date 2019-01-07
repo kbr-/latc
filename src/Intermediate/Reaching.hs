@@ -10,13 +10,14 @@ import Control.Lens (at, non, (%~))
 import Control.Monad.State.Strict
 import Data.List
 import qualified Data.Map as M
+import qualified Data.Set as S
 
 import Common
 import Quad
 import Intermediate.Flow
 
 type Def = (Int, Int)
-type Defs = M.Map Var [Def]
+type Defs = M.Map Var (S.Set Def)
 
 reaching :: Graph Block -> [Defs]
 reaching Graph{..} = fixed step start
@@ -24,7 +25,7 @@ reaching Graph{..} = fixed step start
     start = map (const M.empty) vertices
     step reachingBegins =
         let reachingEnds = zipWith (uncurry reachingBlock) (indexed vertices) reachingBegins
-         in map (M.unionsWith union . map (reachingEnds !!)) ies
+         in map (M.unionsWith S.union . map (reachingEnds !!)) ies
     ies = incoming edges
 
 reachingBlock :: Int -> Block -> Defs -> Defs
@@ -40,4 +41,4 @@ kill :: Var -> Defs -> Defs
 kill = M.delete
 
 def :: Var -> Def -> Defs -> Defs
-def v d = at v . non [] %~ (d :)
+def v d = at v . non S.empty %~ (S.insert d)

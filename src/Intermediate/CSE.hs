@@ -10,6 +10,7 @@ import Control.Exception
 import Control.Monad.State.Strict
 import Extra (allSame)
 import qualified Data.Map as M
+import qualified Data.Set as S
 
 import Common
 import Quad
@@ -35,7 +36,7 @@ eliminate Graph{..} = map fst $ fixed step start
             vs <- traverse (M.lookup e . heldIn . (css !!)) sources
             guard $ allSame vs
             let v = assert (not $ null vs) $ head vs
-                ds = (defs !! i) ^. at v . non []
+                ds = (defs !! i) ^. at v . non S.empty . to S.toList
                 d = assert (not $ null ds) $ head ds
             guard $ null $ tail ds
             guard $ bs !! fst d !! snd d == Assign v e
