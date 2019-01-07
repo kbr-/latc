@@ -12,7 +12,7 @@ void printString(const char* str) {
 
 void error() {
     printf("runtime error\n");
-    abort();
+    exit(EXIT_FAILURE);
 }
 
 int readInt() {
