@@ -19,6 +19,7 @@ data Use = Use
     , _lastUse    :: Int
     , _passesCall :: Bool
     }
+type Uses = M.Map Var Use
 
 nextUse k a    = fmap (\b -> a { _nextUse    = b }) (k (_nextUse a))
 passesCall k a = fmap (\b -> a { _passesCall = b }) (k (_passesCall a))
@@ -31,24 +32,21 @@ liveness rets Graph{..} = fixed step start
         let aliveBegin = map (snd . uncurry nextUses) $ zip vertices aliveEnds
          in zipWith (\s dests -> S.unions $ s : map (\i -> assert (i < length aliveBegin) $ aliveBegin !! i) dests) aliveEnds edges
 
-nextUses :: [Quad] -> S.Set Var -> ([(Quad, M.Map Var Use)], S.Set Var)
+nextUses :: [Quad] -> S.Set Var -> ([(Quad, Uses)], S.Set Var)
 nextUses qs aliveEnd = (reverse *** (M.keysSet . fst)) . flip runState start . forM (reverse qs) $ \q -> do
     (u, i) <- get
     let u' = if isCall q then markCall u else u
     put $ (update i q u', i-1)
     pure (q, u)
   where
-    update :: Int -> Quad -> M.Map Var Use -> M.Map Var Use
+    update :: Int -> Quad -> Uses -> Uses
     update i = \case
-        Assign v e         -> flip (foldr $ use i) (vars e) . kill v
-        CondJump a1 _ a2 _ -> flip (foldr $ use i) $ vars' [a1, a2]
-        Exp e              -> flip (foldr $ use i) $ vars e
-        _                    -> id
+        Assign v e         -> flip (foldr $ useVar i) (vars e) . kill v
+        CondJump a1 _ a2 _ -> flip (foldr $ useVar i) $ vars' [a1, a2]
+        Exp e              -> flip (foldr $ useVar i) $ vars e
+        _                  -> id
 
-    use :: Int -> Var -> M.Map Var Use -> M.Map Var Use
-    use i v = at v %~ maybe (Just $ Use i i False) (Just . (nextUse .~ i))
-
-    kill :: Var -> M.Map Var Use -> M.Map Var Use
+    kill :: Var -> Uses -> Uses
     kill = M.delete
 
     isCall :: Quad -> Bool
@@ -57,11 +55,14 @@ nextUses qs aliveEnd = (reverse *** (M.keysSet . fst)) . flip runState start . f
         Exp (Call _ _)      -> True
         _                       -> False
 
-    markCall :: M.Map Var Use -> M.Map Var Use
+    markCall :: Uses -> Uses
     markCall = M.map $ passesCall .~ True
 
-    start :: (M.Map Var Use, Int)
+    start :: (Uses, Int)
     start = (M.fromSet (const $ Use (cnt + 1) (cnt + 1) False) aliveEnd, cnt)
 
     cnt :: Int
     cnt = length qs
+
+useVar :: Int -> Var -> Uses -> Uses
+useVar i v = at v %~ maybe (Just $ Use i i False) (Just . (nextUse .~ i))

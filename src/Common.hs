@@ -1,5 +1,9 @@
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE TupleSections #-}
 module Common where
+
+import Data.List
+import Data.Function
 
 import Quad
 
@@ -20,3 +24,6 @@ vars' :: [Arg] -> [Var]
 vars' = concatMap $ \case
     Var v -> [v]
     _     -> []
+
+sortWithM :: (Applicative m, Ord b) => (a -> m b) -> [a] -> m [a]
+sortWithM f l = (map fst . sortBy (compare `on` snd)) <$> traverse (\x -> (x, ) <$> f x) l

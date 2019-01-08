@@ -25,6 +25,7 @@ library
                        Intermediate.Flow,
                        Intermediate.Liveness,
                        Asm.Generate,
+                       Asm.Entry,
                        Common
   build-depends:       base >= 4.7 && < 5,
                        containers, array, mtl, transformers, extra, lens
