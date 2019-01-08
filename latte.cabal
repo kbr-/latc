@@ -3,10 +3,8 @@ version:             0.1.0.0
 build-type:          Simple
 cabal-version:       >=1.10
 license:             Apache
-license-file:        LICENSE
 author:              Kamil Braun
 copyright:           2018 Kamil Braun
-extra-source-files:  README.md
 
 library
   exposed-modules:     AbsLatte,
