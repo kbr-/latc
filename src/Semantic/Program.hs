@@ -27,6 +27,7 @@ predefFuns = M.fromList
     ,("error",       AT.FunType AT.Void [])
     ,("readInt",     AT.FunType AT.Int  [])
     ,("readString",  AT.FunType AT.Str  [])
+    ,("_concat",     AT.FunType AT.Str  [AT.Str, AT.Str])
     ]
 
 type ZP = ErrorT Err Identity

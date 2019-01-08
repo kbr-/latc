@@ -1,5 +1,3 @@
-all: latc
-
 latc: bnfc
 	stack install --local-bin-path ./
 
@@ -11,3 +9,5 @@ bnfc:
 clean:
 	make -C src/bnfc/ distclean
 	rm latc
+	rm latc_x86
+	stack clean
