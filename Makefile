@@ -1,6 +1,3 @@
-MRJP := /home/students/inf/PUBLIC/MRJP
-export PATH := $(MRJP)/bin:$(MRJP)/Stack:$(PATH)
-
 latc: bnfc
 	stack install --local-bin-path ./
 

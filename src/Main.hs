@@ -63,4 +63,4 @@ runAs inp out = rawSystem "as" ["--32", inp, "-o", out] *> pure ()
 runLd :: FilePath -> FilePath -> IO ()
 runLd inp out = rawSystem "ld" (["-o", out, "-melf_i386", inp] <> libs) *> pure ()
   where
-    libs = map ("lib/" <>) ["runtime.o", "crt1.o", "crti.o", "crtn.o", "libc.a", "libgcc.a", "libgcc_eh.a", "libc.a"]
+    libs = map ("lib/" <>) ["runtime.o", "crt1.o", "crti.o", "crtn.o", "libc.a"]

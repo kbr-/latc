@@ -231,7 +231,7 @@ runAs inp out = rawSystem "as" ["--32", inp, "-o", out]
 runLd :: FilePath -> FilePath -> IO ExitCode
 runLd inp out = rawSystem "ld" (["-o", out, "-melf_i386", inp] ++ libs)
   where
-    libs = map ("lib/" ++) ["runtime.o", "crt1.o", "crti.o", "crtn.o", "libc.a", "libgcc.a", "libgcc_eh.a", "libc.a"]
+    libs = map ("lib/" ++) ["runtime.o", "crt1.o", "crti.o", "crtn.o", "libc.a"]
 
 prop_CalcExpr :: Expr -> Property
 prop_CalcExpr e =
