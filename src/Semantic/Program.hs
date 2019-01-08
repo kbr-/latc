@@ -199,7 +199,8 @@ argAlreadyDeclared ident =
 
 funAlreadyDeclared :: AT.Ident -> Err
 funAlreadyDeclared ident =
-    "Function already declared: " <> ident
+    "Function already declared: " <> ident <>
+    if elem ident (map fst . M.toList $ predefFuns) then " (builtin function)" else ""
 
 mustReturn :: AT.Ident -> Err
 mustReturn ident =
