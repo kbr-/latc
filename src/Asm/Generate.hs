@@ -20,6 +20,7 @@ import Data.Function
 import Data.List
 import qualified Data.Map as M
 import qualified Data.Set as S
+import Common
 import Debug.Trace
 
 import qualified Quad as Q
@@ -337,7 +338,7 @@ quad q nextUses = {- deb <* traceM ("quad: " ++ P.printQuad q) <* -}case q of
         saveEndLoc
         emit $ jop op l
     Q.Exp (Q.Call f as) -> call avs f as
-    Q.Exp _ -> pure ()
+    Q.Exp e -> mapM_ freeDesc' $ vars e
   where
     avs :: S.Set Q.Var
     avs = M.keysSet nextUses
@@ -382,8 +383,11 @@ quad q nextUses = {- deb <* traceM ("quad: " ++ P.printQuad q) <* -}case q of
             ]) (generalRegs \\ exclude)
 
     freeDesc :: MonadState BlockSt m => Q.Arg -> m ()
-    freeDesc (Q.Var v) = unless (alive avs v) $ remove v
+    freeDesc (Q.Var v) = freeDesc' v
     freeDesc _ = pure ()
+
+    freeDesc' :: MonadState BlockSt m => Q.Var -> m ()
+    freeDesc' v = unless (alive avs v) $ remove v
 
     calleeSave :: Reg -> Bool
     calleeSave = flip elem [ebx, esi, edi]
