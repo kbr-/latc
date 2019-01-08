@@ -1,4 +1,3 @@
-{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE ViewPatterns #-}
@@ -68,8 +67,14 @@ data BlockSt = BlockSt
 
 type Z = RWS BlockEnv [Entry] BlockSt
 
-makeLenses ''FunSt
-makeLenses ''BlockSt
+memLocs k a    = fmap (\b -> a { _memLocs    = b }) (k (_memLocs a))
+nextOffset k a = fmap (\b -> a { _nextOffset = b }) (k (_nextOffset a))
+savedRegs k a  = fmap (\b -> a { _savedRegs  = b }) (k (_savedRegs a))
+
+loc k a        = fmap (\b -> a { _loc        = b }) (k (_loc a))
+memVars k a    = fmap (\b -> a { _memVars    = b }) (k (_memVars a))
+regVars k a    = fmap (\b -> a { _regVars    = b }) (k (_regVars a))
+funSt k a      = fmap (\b -> a { _funSt      = b }) (k (_funSt a))
 
 data TopDef = FunDef
     { blocks :: [([Q.Quad], S.Set Q.Var)]

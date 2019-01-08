@@ -27,8 +27,6 @@ import qualified Quad as Q
 import qualified Asm.Generate as A
 import Intermediate.Flow
 import Intermediate.Liveness
-import Intermediate.Reaching
-import Intermediate.CSE
 import PrintProg
 
 main :: IO ()

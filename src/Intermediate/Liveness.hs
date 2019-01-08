@@ -1,6 +1,5 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TupleSections #-}
 module Intermediate.Liveness where
 
@@ -21,7 +20,8 @@ data Use = Use
     , _passesCall :: Bool
     }
 
-makeLenses ''Use
+nextUse k a    = fmap (\b -> a { _nextUse    = b }) (k (_nextUse a))
+passesCall k a = fmap (\b -> a { _passesCall = b }) (k (_passesCall a))
 
 liveness :: Bool -> Graph Block -> [S.Set Var]
 liveness rets Graph{..} = fixed step start

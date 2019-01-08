@@ -1,7 +1,6 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE TemplateHaskell #-}
 module Intermediate.Generate where
 
 import qualified Annotated as T
@@ -36,8 +35,12 @@ data GenEnv = GenEnv
 
 type Gen = RWS GenEnv [Quad] GenSt
 
-makeLenses ''ProgSt
-makeLenses ''GenSt
+consts k a     = fmap (\b -> a { _consts     = b }) (k (_consts a))
+codeLabels k a = fmap (\b -> a { _codeLabels = b }) (k (_codeLabels a))
+strLabels k a  = fmap (\b -> a { _strLabels  = b }) (k (_strLabels a))
+
+progSt k a     = fmap (\b -> a { _progSt     = b }) (k (_progSt a))
+temps k a      = fmap (\b -> a { _temps      = b }) (k (_temps a))
 
 getVar :: T.LVal -> Gen String
 getVar (T.LVal x) = do

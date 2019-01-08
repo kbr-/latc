@@ -8,6 +8,6 @@ bnfc:
 .PHONY: clean
 clean:
 	make -C src/bnfc/ distclean
-	rm latc
-	rm latc_x86
+	rm -f latc
+	rm -f latc_x86
 	stack clean
