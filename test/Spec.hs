@@ -14,7 +14,8 @@ import Data.Maybe
 import Data.List
 import Control.Arrow
 import Control.Monad
-import Text.Read
+import Control.Monad.State.Strict
+import Text.Read (readMaybe)
 import Test.Hspec
 import Test.QuickCheck
 import Test.QuickCheck.Monadic
@@ -38,7 +39,7 @@ data Expr
     = Op Expr Op Expr
     | Const Int
     | Var Name
-    | ConstF ConstFun
+    | Fun Int Expr
 
 data Op = Plus | Minus | Times | Div | Mod
     deriving Eq
@@ -46,19 +47,17 @@ data Op = Plus | Minus | Times | Div | Mod
 newtype Name = Name String
     deriving (Eq, Show)
 
-newtype ConstFun = ConstFun Int
-    deriving Eq
-
 instance Arbitrary Op where
-    arbitrary = frequency . map (second pure) $ [(6, Plus), (2, Minus), (0, Times), (1, Div), (1, Mod)]
+    arbitrary = frequency . map (second pure) $ [(6, Plus), (3, Minus), (0, Times), (1, Div), (1, Mod)]
 
 instance Arbitrary Name where
     arbitrary = oneof $ map (pure . Name) ["a", "b", "c", "d", "e"]
 
 instance Arbitrary Expr where
-    arbitrary = choose (10, 15) >>= \s -> resize s $ sized expr
+    arbitrary = choose (10, 15) >>= \s -> uniqueFuns <$> resize s (sized expr)
 
     shrink (Op a op b) = [a, b] ++ [Op a' op b' | (a', b') <- shrink (a, b)]
+    shrink (Fun x e) = [e] ++ [Fun x e' | e' <- shrink e]
     shrink _ = []
 
 instance Show Expr where
@@ -66,46 +65,58 @@ instance Show Expr where
         Op a op b    -> "(" ++ show a ++ " " ++ pOp op ++ " " ++ show b ++ ")"
         Var (Name v) -> v
         Const x      -> if x < 0 then "(" ++ show x ++ ")" else show x
-        ConstF (ConstFun x) -> "((\\_ -> " ++ show x ++ ") ())"
+        Fun f e      -> "((\\_ -> " ++ show e ++ ") " ++ show f ++ ")"
+
+type FVar = (Int, Name)
 
 expr :: Int -> Gen Expr
-expr 0 = frequency $ [(1, genConstF), (1, genInt), (2, Var <$> arbitrary)]
+expr 0 = frequency $ [(1, Const <$> arbitrary), (1, Var <$> arbitrary)]
 expr n | n > 0 = frequency $
     [ (15, Op <$> subexpr <*> arbitrary <*> subexpr)
-    , (2, genInt)
-    , (2, genConstF)
-    , (4, Var   <$> arbitrary)
+    , (2, Const <$> arbitrary)
+    , (2, Fun 0 <$> subexpr)
+    , (4, Var <$> arbitrary)
     ]
   where
     subexpr = expr (n - 1)
 
-genInt :: Gen Expr
-genInt = (\i -> if i < 0 then Op (Const 0) Minus (Const i) else (Const i)) <$> arbitrary
+uniqueFuns :: Expr -> Expr
+uniqueFuns e = evalState (go e) 0
+  where
+    go :: Expr -> State Int Expr
+    go (Op a op b) = Op <$> go a <*> pure op <*> go b
+    go (Fun _ e)   = modify (+1) *> (Fun <$> get <*> go e)
+    go e           = pure e
 
-genConstF :: Gen Expr
-genConstF = ConstF . ConstFun <$> arbitrary
-
-genVals :: [Name] -> Gen [(Name, Int)]
+genVals :: [FVar] -> Gen [(FVar, Int)]
 genVals = mapM (\v -> (v, ) <$> arbitrary)
 
-vars :: Expr -> [Name]
-vars = \case
-    Op a _ b -> vars a `union` vars b
+vars :: Expr -> [FVar]
+vars = vars' 0
+
+vars' :: Int -> Expr -> [FVar]
+vars' f = \case
+    Op a _ b -> vars' f a `union` vars' f b
     Const _  -> []
-    Var v    -> [v]
-    ConstF _ -> []
+    Var v    -> [(f, v)]
+    Fun f' e -> vars' f' e
 
 depth :: Expr -> Int
 depth = \case
     Op a _ b -> 1 + max (depth a) (depth b)
+    Fun _ e  -> depth e
     _        -> 0
 
-hasDivideByZero :: Expr -> [(Name, Int)] -> Bool
-hasDivideByZero e vs = case e of
+hasDivideByZero :: [(FVar, Int)] -> Expr -> Bool
+hasDivideByZero = hasDivideByZero' 0
+
+hasDivideByZero' :: Int -> [(FVar, Int)] -> Expr -> Bool
+hasDivideByZero' f vs = \case
     Op a op b ->
-        hasDivideByZero a vs ||
-        hasDivideByZero b vs ||
-        ((eval b vs == 0) && (op == Div || op == Mod))
+        hasDivideByZero' f vs a ||
+        hasDivideByZero' f vs b ||
+        ((op == Div || op == Mod) && (eval' f vs b == 0))
+    Fun f' e -> hasDivideByZero' f' vs e
     _ -> False
 
 pOp :: Op -> String
@@ -116,12 +127,15 @@ pOp = \case
     Div   -> "/"
     Mod   -> "%"
 
-eval :: Expr -> [(Name, Int)] -> Int
-eval e vs = case e of
-    Op a op b           -> toFun op (eval a vs) (eval b vs)
-    Var v               -> vs `at` v
-    Const x             -> x
-    ConstF (ConstFun x) -> x
+eval :: [(FVar, Int)] -> Expr -> Int
+eval = eval' 0
+
+eval' :: Int -> [(FVar, Int)] -> Expr -> Int
+eval' f vs = \case
+    Op a op b -> toFun op (eval' f vs a) (eval' f vs b)
+    Var v     -> vs `at` (f, v)
+    Const x   -> x
+    Fun f' e  -> eval' f' vs e
   where
     toFun = \case
         Plus  -> (+)
@@ -132,54 +146,59 @@ eval e vs = case e of
 
 type Pos = Maybe (Int, Int)
 
-funAsmName :: ConstFun -> String
-funAsmName (ConstFun x) = if x < 0 then "f__" ++ show (-x) else "f_" ++ show x
+funAsmName :: Int -> String
+funAsmName i = "f" ++ show i
 
-toAbsExpr :: Expr -> T.Expr Pos
-toAbsExpr = \case
-    Op a op b | elem op [Plus, Minus] -> T.EAdd pos (toAbsExpr a) (toAbsAddOp op) (toAbsExpr b)
-    Op a op b                         -> T.EMul pos (toAbsExpr a) (toAbsMulOp op) (toAbsExpr b)
+absExpr :: Expr -> T.Expr Pos
+absExpr = \case
+    Op a op b | elem op [Plus, Minus] -> T.EAdd pos (absExpr a) (absAdd op) (absExpr b)
+    Op a op b                         -> T.EMul pos (absExpr a) (absMul op) (absExpr b)
     Const x                           -> T.ELitInt pos $ fromIntegral x
     Var (Name v)                      -> T.EVar pos (T.Ident v)
-    ConstF f@(ConstFun x)               -> T.EApp pos (T.Ident $ funAsmName f) []
+    Fun f _                           -> T.EApp pos (T.Ident $ funAsmName f) []
   where
 
-toAbsMulOp :: Op -> T.MulOp Pos
-toAbsMulOp = \case
+absMul :: Op -> T.MulOp Pos
+absMul = \case
     Times -> T.Times pos
     Div   -> T.Div pos
     Mod   -> T.Mod pos
 
-toAbsAddOp :: Op -> T.AddOp Pos
-toAbsAddOp = \case
+absAdd :: Op -> T.AddOp Pos
+absAdd = \case
     Plus  -> T.Plus pos
     Minus -> T.Minus pos
 
 pos :: Maybe (Int, Int)
 pos = Nothing
 
-collectFuns :: Expr -> [ConstFun]
-collectFuns = go
-  where
-    go (Op a _ b) = go a `union` go b
-    go (ConstF x) = [x]
-    go _          = []
+collectFuns :: Expr -> [(Int, Expr)]
+collectFuns = \case
+    Op a _ b -> collectFuns a ++ collectFuns b
+    Fun f e  -> [(f, e)]
+    _        -> []
 
-simpleProgram :: Expr -> [(Name, Int)] -> T.Program Pos
+simpleProgram :: Expr -> [(FVar, Int)] -> T.Program Pos
 simpleProgram e vs = T.Program pos $
     [ T.FnDef pos (T.Int pos) (T.Ident "main") [] $ T.Block pos $
-        map (uncurry define) vs ++
-        [ T.SExp pos $ T.EApp pos (T.Ident "printInt") [toAbsExpr e]
+        map (uncurry define) (varsFor 0 vs) ++
+        [ T.SExp pos $ T.EApp pos (T.Ident "printInt") [absExpr e]
         , T.Ret pos $ T.ELitInt pos 0
         ]
-    ] ++ map funDef (collectFuns e)
+    ] ++ concatMap (uncurry funDef) (collectFuns e)
   where
+    varsFor :: Int -> [(FVar, Int)] -> [(Name, Int)]
+    varsFor f = map (first snd) . filter ((== f) . fst . fst)
+
     define :: Name -> Int -> T.Stmt Pos
     define (Name v) x = T.Decl pos (T.Int pos) [T.Init pos (T.Ident v) $ T.ELitInt pos $ fromIntegral x]
 
-    funDef :: ConstFun -> T.TopDef Pos
-    funDef f@(ConstFun x) = T.FnDef pos (T.Int pos) (T.Ident $ funAsmName f) [] $
-        T.Block pos [ T.Ret pos $ T.ELitInt pos $ fromIntegral x ]
+    funDef :: Int -> Expr -> [T.TopDef Pos]
+    funDef f e =
+        [ T.FnDef pos (T.Int pos) (T.Ident $ funAsmName f) [] $ T.Block pos $
+            map (uncurry define) (varsFor f vs) ++
+            [ T.Ret pos $ absExpr e ]
+        ] ++ concatMap (uncurry funDef) (collectFuns e)
 
 compile :: T.Program Pos -> Either String String
 compile p = do
@@ -191,23 +210,6 @@ compile p = do
         alivess = zipWith liveness retss graphs
 
     let ads = zipWith4 A.FunDef (zipWith zip bss alivess) retss names argss
-        asm = A.program consts ads
-    pure $ intercalate "\n" asm ++ "\n"
-
-compile' p = do
-    prog <- left (intercalate "\n") $ S.runProgram p
-    let Q.Program consts ds = I.program prog
-        (retss, names, argss, qss) = unzip4 $ flip map ds $ \(Q.FunDef rets name args qs) -> (rets, name, args, qs)
-        graphs = map mkGraph qss
-        bss = map vertices graphs
-        alivess = zipWith liveness retss graphs
-        defss = map reaching graphs
-
-    let bss' = zipWith (\g defs -> eliminate $ Graph (zip (vertices g) defs) (edges g)) graphs defss
-        graphs' = zipWith (\g bs -> Graph bs (edges g)) graphs bss'
-        alivess' = zipWith liveness retss graphs'
-
-    let ads = zipWith4 A.FunDef (zipWith zip bss' alivess') retss names argss
         asm = A.program consts ads
     pure $ intercalate "\n" asm ++ "\n"
 
@@ -237,9 +239,9 @@ prop_CalcExpr :: Expr -> Property
 prop_CalcExpr e =
     collect (depth e) $
     forAll (genVals $ vars e) $ \vs ->
-    not (hasDivideByZero e vs) && depth e > 1 ==>
+    not (hasDivideByZero vs e) && depth e > 1 ==>
     let p = simpleProgram e vs in counterexample (pProg p) $
-    let expected = eval e vs in counterexample ("expected: " ++ show expected) $
+    let expected = eval vs e in counterexample ("expected: " ++ show expected) $
     monadicIO $ do
         --traceM $ "testing expr: " ++ show e
         code <- case compile p of
@@ -248,14 +250,9 @@ prop_CalcExpr e =
         --traceM $ "asm:\n" ++ code
         out <- run $ runCode code
         let out' = readMaybe out
+        monitor $ counterexample $ "got: " ++ show out'
+        monitor $ counterexample $ "asm:\n" ++ code
         assert $ out' == Just expected
-
-        code <- case compile' $ simpleProgram e vs of
-            Left err -> fail err
-            Right c -> pure c
-        out <- run $ runCode code
-        let out'' = readMaybe out
-        assert $ out' == out''
 
 at :: Eq a => [(a, b)] -> a -> b
 at l i = fromJust $ lookup i l

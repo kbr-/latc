@@ -232,6 +232,7 @@ quad q nextUses = {- deb <* traceM ("quad: " ++ P.printQuad q) <* -}case q of
                     emit $ movl m (reg r)
                     clear r
 
+                    when (calleeSave r) $ save r
                     pure $ reg r
                 m@(AReg r') | r' == eax || r' == edx -> do
                     r <- chooseRegister [eax, edx] avs''' Nothing Nothing
@@ -239,6 +240,8 @@ quad q nextUses = {- deb <* traceM ("quad: " ++ P.printQuad q) <* -}case q of
 
                     emit $ movl m (reg r)
                     move r' r
+
+                    when (calleeSave r) $ save r
 
                     pure $ reg r
                 m -> pure m
@@ -273,6 +276,8 @@ quad q nextUses = {- deb <* traceM ("quad: " ++ P.printQuad q) <* -}case q of
             remove v
             clear r
             addVar v r
+
+            when (calleeSave r) $ save r
     Q.Assign v (Q.Val (Q.Var v')) -> do
         when (alive avs v && not (v == v')) $ do
             remove v
