@@ -75,8 +75,7 @@ oper :: Q.BinOp -> Arg -> Arg -> Entry
 oper op = binOp (case op of
     Q.Plus  -> "addl"
     Q.Minus -> "subl"
-    Q.Times -> "imull"
-    Q.Xor   -> "xorl")
+    Q.Times -> "imull")
 
 calll :: Q.Fun -> Entry
 calll f = "calll " <> f

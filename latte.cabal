@@ -24,6 +24,11 @@ library
                        Intermediate.Generate,
                        Intermediate.Flow,
                        Intermediate.Liveness,
+                       Intermediate.Reaching,
+                       Intermediate.Propagate,
+                       Intermediate.CSE,
+                       Intermediate.Fold,
+                       Intermediate.Copy,
                        Asm.Generate,
                        Asm.Entry,
                        Common

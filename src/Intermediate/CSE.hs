@@ -1,21 +1,21 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeApplications #-}
 module Intermediate.CSE where
 
 import Data.Maybe
 import Data.List ((\\))
 import Control.Lens
-import Control.Exception
 import Control.Monad.State.Strict
-import Extra (allSame)
 import qualified Data.Map as M
-import qualified Data.Set as S
 
 import Common
 import Quad
 import Intermediate.Flow
-import Intermediate.Reaching (Def, Defs)
+import Intermediate.Reaching (Defs)
+import qualified Intermediate.Propagate as P
 
 data CS = CS
     { holds  :: M.Map Var Exp
@@ -24,34 +24,15 @@ data CS = CS
     }
     deriving Eq
 
+instance P.Propagable CS where
+    type E CS = Exp
+    update    = update
+    insert    = insert
+    holds     = holds
+    empty     = CS M.empty M.empty M.empty
+
 eliminate :: Graph (Block, Defs) -> [Block]
-eliminate Graph{..} = map fst $ fixed step start
-  where
-    start = map ((, empty) . fst) vertices
-    step xs =
-        let (bs', csEnds) = unzip $ map (uncurry eliminateBlock) xs
-         in zipWith (\(i, b) sources -> (b, merge i bs' sources csEnds)) (Common.indexed bs') ies
-    merge i bs sources css = foldr
-        (\e -> case do
-            vs <- traverse (M.lookup e . heldIn . (css !!)) sources
-            guard $ allSame vs
-            let v = assert (not $ null vs) $ head vs
-                ds = (defs !! i) ^. at v . non S.empty . to S.toList
-                d = assert (not $ null ds) $ head ds
-            guard $ null $ tail ds
-            guard $ bs !! fst d !! snd d == Assign v e
-            pure v
-         of Nothing -> id
-            Just v  -> insert v e
-        ) empty $ M.keys $ M.unions $ map (heldIn . (css !!)) $ sources
-    defs = map snd vertices
-    ies = incoming edges
-
-empty :: CS
-empty = CS M.empty M.empty M.empty
-
-eliminateBlock :: Block -> CS -> (Block, CS)
-eliminateBlock qs = runState $ mapM (\q -> state $ update q) qs
+eliminate = P.propagate @CS
 
 update :: Quad -> CS -> (Quad, CS)
 update q@(Assign v e@(BinInt _ _ _)) cs@CS{..} = (q', cs')

@@ -1,3 +1,4 @@
+{-# LANGUAGE RecordWildCards #-}
 module Main where
 
 import System.Environment
@@ -15,19 +16,31 @@ import Frontend
 import Semantic.Program
 import Intermediate.Flow
 import Intermediate.Liveness
+import Intermediate.Reaching
+import Intermediate.CSE
 import qualified Quad as Q
 import qualified Intermediate.Generate as I
 import qualified Asm.Generate as A
 
-printIntermediateFun :: [S.Set Q.Var] -> String -> [Q.Var] -> [Block] -> String
-printIntermediateFun aliveEnds name args blocks = intercalate "\n" $
+printDef :: A.TopDef -> String
+printDef (A.FunDef blocks rets name args) = intercalate "\n" $
     [ "fun " <> name <> "(" <> pVars args <> "):"
-    , intercalate "\n" $ zipWith (\as b -> intercalate "\n" $
+    , intercalate "\n" $ map (\(b, as) -> intercalate "\n" $
         [ "{"
         , pQs b
         , "}: " <> pVars (S.toList as)
-        ]) aliveEnds blocks
+        ]) blocks
     ]
+
+flow :: Q.TopDef -> A.TopDef
+flow (Q.FunDef rets name args qs) = A.FunDef (zip bs alives) rets name args
+  where
+    bs = vertices graph
+    alives = liveness rets graph
+    graph = mkGraph qs
+
+cse :: Graph Block -> Graph Block
+cse g = Graph (eliminate $ Graph (zip (vertices g) (reaching g)) (edges g)) (edges g)
 
 main :: IO ()
 main = do
@@ -38,14 +51,8 @@ main = do
     prog <- frontend code
 
     let Q.Program consts ds = I.program prog
-
-        (retss, names, argss, qss) = unzip4 $ flip map ds $ \(Q.FunDef rets name args qs) -> (rets, name, args, qs)
-        graphs = map mkGraph qss
-        bss = map vertices graphs
-        alivess = zipWith liveness retss graphs
-
-        ads = zipWith4 A.FunDef (zipWith zip bss alivess) retss names argss
-        quads = intercalate "\n\n" $ zipWith4 printIntermediateFun alivess names argss bss
+        ads = map flow ds
+        quads = intercalate "\n\n" $ map printDef ads
         asm = intercalate "\n" (A.program consts ads) <> "\n"
 
     let execFilePath = dropExtension filePath

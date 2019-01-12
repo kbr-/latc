@@ -23,9 +23,6 @@ mkGraph qs = Graph{..}
     vertices = splitBlocks qs
     edges = edges' vertices
 
-mapGraph :: (a -> b) -> Graph a -> Graph b
-mapGraph f Graph{..} = Graph (map f vertices) edges
-
 splitBlocks :: [Quad] -> [Block]
 splitBlocks qs = reverse . map reverse . fst . foldl step ([[]], False) $ qs
   where

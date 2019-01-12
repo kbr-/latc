@@ -34,7 +34,6 @@ data BinOp
     | Times
     | Div
     | Mod
-    | Xor
     deriving (Eq, Ord)
 
 newtype Label = Label { name :: String }

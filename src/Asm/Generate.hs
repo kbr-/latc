@@ -35,7 +35,6 @@ newtype FunEnv = FunEnv
 
 data BlockEnv = BlockEnv
     { endLoc   :: M.Map Q.Var Memloc
-    , blockLen :: Int
     }
 
 data FunSt = FunSt
@@ -126,7 +125,7 @@ fun blocks rets args name =
 
     (FunSt{..}, code) = execRWS
         (forM blocks $ \(b, aliveEnd) ->
-            let (b', aliveBegin) = nextUses b aliveEnd in block b' aliveBegin aliveEnd)
+            let (uses, aliveBegin) = nextUses b aliveEnd in block (zip b uses) aliveBegin aliveEnd)
             FunEnv{..}
             FunSt
                 { _memLocs    = memLocs
@@ -165,7 +164,6 @@ block qs aliveBegin aliveEnd = do
             ( if S.member v aliveBegin then M.insert v ([l], Nothing) sL else sL
             , if S.member v aliveBegin then M.insert l [v] sM else sM
             , if S.member v aliveEnd then M.insert v l eL else eL)) (M.empty, M.empty, M.empty) cvls
-        blockLen = length qs
     desc <- BlockSt startLoc startMemVars M.empty <$> get
     let (_funSt -> s, code) = execRWS (mapM (uncurry quad) qs *> saveEndLoc) BlockEnv{..} desc
     tell code
@@ -445,13 +443,12 @@ chooseMem vs = do
     case mems' of
         []    -> newMem
         mems' -> last <$> sortWithM (\m -> sequence
-            [ anyM (\v -> andM [{-reachesEnd v, -}(== Just m) . M.lookup v <$> reader endLoc]) vs
+            [ anyM (\v -> andM [{-reachesEnd' v, -}(== Just m) . M.lookup v <$> reader endLoc]) vs
             , not . elem m . M.elems <$> reader endLoc
             ]) mems'
 
--- reachesEnd :: MonadReader BlockEnv m => Q.Var -> m Bool
--- reachesEnd v = reader blockLen <&> \i ->
---     nextUses ^? at v . _Just . lastUse . to (== i + 1) ^. non False
+-- reachesEnd' :: Q.Var -> Bool
+-- reachesEnd' v = uses ^. at v . reachesEnd
 
 newMem :: Z Memloc
 newMem = zoom funSt $ do

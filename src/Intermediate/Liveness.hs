@@ -1,6 +1,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE TemplateHaskell #-}
 module Intermediate.Liveness where
 
 import Control.Arrow
@@ -16,13 +17,13 @@ import Intermediate.Flow
 
 data Use = Use
     { _nextUse    :: Int
-    , _lastUse    :: Int
+    , _reachesEnd :: Bool
     , _passesCall :: Bool
     }
+
 type Uses = M.Map Var Use
 
-nextUse k a    = fmap (\b -> a { _nextUse    = b }) (k (_nextUse a))
-passesCall k a = fmap (\b -> a { _passesCall = b }) (k (_passesCall a))
+makeLenses ''Use
 
 liveness :: Bool -> Graph Block -> [S.Set Var]
 liveness rets Graph{..} = fixed step start
@@ -32,12 +33,12 @@ liveness rets Graph{..} = fixed step start
         let aliveBegin = map (snd . uncurry nextUses) $ zip vertices aliveEnds
          in zipWith (\s dests -> S.unions $ s : map (\i -> assert (i < length aliveBegin) $ aliveBegin !! i) dests) aliveEnds edges
 
-nextUses :: [Quad] -> S.Set Var -> ([(Quad, Uses)], S.Set Var)
+nextUses :: [Quad] -> S.Set Var -> ([Uses], S.Set Var)
 nextUses qs aliveEnd = (reverse *** (M.keysSet . fst)) . flip runState start . forM (reverse qs) $ \q -> do
     (u, i) <- get
     let u' = if isCall q then markCall u else u
     put $ (update i q u', i-1)
-    pure (q, u)
+    pure u
   where
     update :: Int -> Quad -> Uses -> Uses
     update i = \case
@@ -53,16 +54,16 @@ nextUses qs aliveEnd = (reverse *** (M.keysSet . fst)) . flip runState start . f
     isCall = \case
         Assign _ (Call _ _) -> True
         Exp (Call _ _)      -> True
-        _                       -> False
+        _                   -> False
 
     markCall :: Uses -> Uses
     markCall = M.map $ passesCall .~ True
 
     start :: (Uses, Int)
-    start = (M.fromSet (const $ Use (cnt + 1) (cnt + 1) False) aliveEnd, cnt)
+    start = (M.fromSet (const $ Use (cnt + 1) True False) aliveEnd, cnt)
 
     cnt :: Int
     cnt = length qs
 
 useVar :: Int -> Var -> Uses -> Uses
-useVar i v = at v %~ maybe (Just $ Use i i False) (Just . (nextUse .~ i))
+useVar i v = at v %~ maybe (Just $ Use i False False) (Just . (nextUse .~ i))

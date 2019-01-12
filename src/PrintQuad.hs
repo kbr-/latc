@@ -48,7 +48,6 @@ printBinOp = \case
     Times -> "*"
     Div   -> "/"
     Mod   -> "%"
-    Xor   -> "^"
 
 printRelOp :: RelOp -> String
 printRelOp = \case
