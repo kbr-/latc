@@ -35,6 +35,9 @@ data Expr
 data Op = Plus | Minus | Times | Div | Mod
     deriving Eq
 
+data FOpt = Fold | CSE | Copy
+    deriving (Eq, Show)
+
 newtype Name = Name String
     deriving (Eq, Show)
 
@@ -42,7 +45,7 @@ instance Arbitrary Op where
     arbitrary = frequency . map (second pure) $ [(6, Plus), (3, Minus), (0, Times), (1, Div), (1, Mod)]
 
 instance Arbitrary Name where
-    arbitrary = oneof $ map (pure . Name) ["a", "b", "c", "d", "e"]
+    arbitrary = elements $ map Name ["a", "b", "c", "d", "e"]
 
 instance Arbitrary Expr where
     arbitrary = choose (10, 15) >>= \s -> uniqueFuns <$> resize s (sized expr)
@@ -59,6 +62,12 @@ instance Show Expr where
         Fun f e      -> "((\\_ -> " ++ show e ++ ") " ++ show f ++ ")"
 
 type FVar = (Int, Name)
+
+toOpt :: FOpt -> ForwardOpt
+toOpt = \case
+    Fold -> fold
+    CSE  -> cse
+    Copy -> copy
 
 expr :: Int -> Gen Expr
 expr 0 = frequency $ [(1, Const <$> arbitrary), (1, Var <$> arbitrary)]
@@ -202,23 +211,15 @@ runCode code = withSystemTempDirectory "quickcheck_latc" $ \dir -> do
     runLd objPath execPath
     readProcess execPath [] ""
 
-data FOpt = Fold | CSE | Copy
-    deriving (Eq, Show)
-
-toOpt :: FOpt -> ForwardOpt
-toOpt = \case
-    Fold -> fold
-    CSE  -> cse
-    Copy -> copy
-
 prop_CalcExpr :: Expr -> Property
 prop_CalcExpr e =
     collect (depth e) $
     forAll (genVals $ vars e) $ \vs ->
     not (hasDivideByZero vs e) && depth e > 1 ==>
-    forAll (listOf $ elements [Fold, CSE, Copy]) $ \opts ->
     let p = simpleProgram e vs in counterexample (pProg p) $
     let expected = eval vs e in counterexample ("expected: " ++ show expected) $
+    forAll (resize 12 $ listOf $ elements [Fold, CSE, Copy]) $ \opts ->
+    collect opts $
     monadicIO $ do
         --traceM $ "testing expr: " ++ show e
         prog <- case semantic p of
