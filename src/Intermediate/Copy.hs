@@ -28,7 +28,7 @@ instance P.Propagable Vars where
     holds (Vars vs)      = vs
     empty                = Vars M.empty
 
-copy :: Graph (Block, Defs) -> [Block]
+copy :: Graph Block -> [Defs] -> [Block]
 copy = P.propagate @Vars
 
 update :: Quad -> Vars -> (Quad, Vars)

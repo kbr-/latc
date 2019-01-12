@@ -6,8 +6,6 @@ module Main where
 import System.Process
 import System.FilePath
 import System.IO.Temp
-import System.Exit
-import System.Timeout
 import Debug.Trace
 
 import Data.Maybe
@@ -21,13 +19,8 @@ import Test.QuickCheck
 import Test.QuickCheck.Monadic
 
 import qualified AbsLatte as T
-import qualified Semantic.Program as S
-import qualified Intermediate.Generate as I
-import qualified Quad as Q
-import qualified Asm.Generate as A
-import Intermediate.Flow
-import Intermediate.Liveness
 import PrintProg
+import Compile
 
 main :: IO ()
 main = hspec $
@@ -142,7 +135,8 @@ eval' f vs = \case
         Div   -> quot
         Mod   -> rem
 
-type Pos = Maybe (Int, Int)
+    at :: Eq a => [(a, b)] -> a -> b
+    at l i = fromJust $ lookup i l
 
 funAsmName :: Int -> String
 funAsmName i = "f" ++ show i
@@ -198,59 +192,43 @@ simpleProgram e vs = T.Program pos $
             [ T.Ret pos $ absExpr e ]
         ] ++ concatMap (uncurry funDef) (collectFuns e)
 
-compile :: T.Program Pos -> Either String String
-compile p = do
-    prog <- left (intercalate "\n") $ S.runProgram p
-    let Q.Program consts ds = I.program prog
-        (retss, names, argss, qss) = unzip4 $ flip map ds $ \(Q.FunDef rets name args qs) -> (rets, name, args, qs)
-        graphs = map mkGraph qss
-        bss = map vertices graphs
-        alivess = zipWith liveness retss graphs
-
-    let ads = zipWith4 A.FunDef (zipWith zip bss alivess) retss names argss
-        asm = A.program consts ads
-    pure $ intercalate "\n" asm ++ "\n"
-
 runCode :: String -> IO String
 runCode code = withSystemTempDirectory "quickcheck_latc" $ \dir -> do
     let execPath = dir </> "prog"
         objPath = execPath <.> "o"
         asmPath = execPath <.> "s"
     writeFile asmPath code
-    c <- runAs asmPath objPath
-    when (c /= ExitSuccess) $
-        fail "assembly failed"
-    c <- runLd objPath execPath
-    when (c /= ExitSuccess) $
-        fail "linking failed"
+    runAs asmPath objPath
+    runLd objPath execPath
     readProcess execPath [] ""
 
-runAs :: FilePath -> FilePath -> IO ExitCode
-runAs inp out = rawSystem "as" ["--32", inp, "-o", out]
+data FOpt = Fold | CSE | Copy
+    deriving (Eq, Show)
 
-runLd :: FilePath -> FilePath -> IO ExitCode
-runLd inp out = rawSystem "ld" (["-o", out, "-melf_i386", inp] ++ libs)
-  where
-    libs = map ("lib/" ++) ["runtime.o", "crt1.o", "crti.o", "crtn.o", "libc.a"]
+toOpt :: FOpt -> ForwardOpt
+toOpt = \case
+    Fold -> fold
+    CSE  -> cse
+    Copy -> copy
 
 prop_CalcExpr :: Expr -> Property
 prop_CalcExpr e =
     collect (depth e) $
     forAll (genVals $ vars e) $ \vs ->
     not (hasDivideByZero vs e) && depth e > 1 ==>
+    forAll (listOf $ elements [Fold, CSE, Copy]) $ \opts ->
     let p = simpleProgram e vs in counterexample (pProg p) $
     let expected = eval vs e in counterexample ("expected: " ++ show expected) $
     monadicIO $ do
         --traceM $ "testing expr: " ++ show e
-        code <- case compile p of
+        prog <- case semantic p of
             Left err -> fail err
-            Right c -> pure c
+            Right p  -> pure p
+        let (quads, asm) = Compile.generate prog $ map toOpt opts
         --traceM $ "asm:\n" ++ code
-        out <- run $ runCode code
+        out <- run $ runCode asm
         let out' = readMaybe out
         monitor $ counterexample $ "got: " ++ show out'
-        monitor $ counterexample $ "asm:\n" ++ code
+        monitor $ counterexample $ "quads:\n" ++ quads
+        monitor $ counterexample $ "asm:\n" ++ asm
         assert $ out' == Just expected
-
-at :: Eq a => [(a, b)] -> a -> b
-at l i = fromJust $ lookup i l

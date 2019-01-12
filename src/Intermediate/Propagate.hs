@@ -33,14 +33,13 @@ class (Eq a, Eq (E a), ToExp (E a)) => Propagable a where
 instance ToExp Exp where
     toExp = id
 
-propagate :: forall a. Propagable a => Graph (Block, Defs) -> [Block]
-propagate Graph{..} = map fst $ fixed step start
+propagate :: forall a. Propagable a => Graph Block -> [Defs] -> [Block]
+propagate Graph{..} dss = map fst $ fixed step start
   where
-    start = map ((, empty) . fst) vertices
+    start = map (, empty) vertices
     step xs =
         let (bs', csEnds) = unzip $ map (uncurry $ propagateBlock @a) xs
-         in zipWith3 (\b defs sources -> (b, merge bs' defs $ map (csEnds !!) sources)) bs' defss ies
-    defss = map snd vertices
+         in zipWith3 (\b defs sources -> (b, merge bs' defs $ map (csEnds !!) sources)) bs' dss ies
     ies = incoming edges
 
 propagateBlock :: Propagable a => Block -> a -> (Block, a)

@@ -31,7 +31,7 @@ instance P.Propagable CS where
     holds     = holds
     empty     = CS M.empty M.empty M.empty
 
-eliminate :: Graph (Block, Defs) -> [Block]
+eliminate :: Graph Block -> [Defs] -> [Block]
 eliminate = P.propagate @CS
 
 update :: Quad -> CS -> (Quad, CS)

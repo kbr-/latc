@@ -28,17 +28,15 @@ instance P.Propagable Consts where
     holds (Consts cs)      = cs
     empty                  = Consts M.empty
 
-fold :: Graph (Block, Defs) -> [Quad]
-fold = clean . concat . P.propagate @Consts
+fold :: Graph Block -> [Defs] -> [Quad]
+fold g = clean . concat . P.propagate @Consts g
 
 clean :: [Quad] -> [Quad]
-clean = mapMaybe cleanQuad
+clean = mapMaybe cleanJumps
 
-cleanQuad :: Quad -> Maybe Quad
-cleanQuad = \case
+cleanJumps :: Quad -> Maybe Quad
+cleanJumps = \case
     CondJump (ConstI a) op (ConstI b) l -> if relFun op a b then Just $ Jump l else Nothing
-    Exp e@(Call _ _)                    -> Just $ Exp e
-    Exp _                               -> Nothing
     q                                   -> Just q
 
 update :: Quad -> Consts -> (Quad, Consts)

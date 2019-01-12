@@ -3,7 +3,7 @@ module Main where
 import System.Exit
 import System.Environment
 
-import Frontend
+import Compile
 
 main :: IO ()
 main = do
