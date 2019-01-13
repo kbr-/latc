@@ -1,5 +1,6 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE MultiWayIf #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeApplications #-}
@@ -35,7 +36,7 @@ eliminate :: Graph Block -> [Defs] -> [Block]
 eliminate = P.propagate @CS
 
 update :: Quad -> CS -> (Quad, CS)
-update q@(Assign v e@(BinInt _ _ _)) cs@CS{..} = (q', cs')
+update q@(Assign v e) cs@CS{..} | applicable e = (q', cs')
   where
     q' = maybe q (Assign v . Val . Var) curr
     cs' = if | curr == Just v                 -> cs
@@ -44,6 +45,12 @@ update q@(Assign v e@(BinInt _ _ _)) cs@CS{..} = (q', cs')
     curr = heldIn ^. at e
 update q@(Assign v _) cs = (q, delete v cs)
 update q cs = (q, cs)
+
+applicable :: Exp -> Bool
+applicable = \case
+    BinInt _ _ _ -> True
+    Load _       -> True
+    _            -> False
 
 delete :: Var -> CS -> CS
 delete v CS{..} = CS holds' heldIn' occurs'
