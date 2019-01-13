@@ -23,6 +23,7 @@ import qualified Asm.Generate as Asm
 import qualified Intermediate.Fold as F
 import qualified Intermediate.Copy as C
 import qualified Intermediate.Dead as D
+import qualified Intermediate.Peephole as P
 import qualified Quad as Q
 import qualified Intermediate.Generate as I
 
@@ -47,8 +48,13 @@ cleanDead g rets _ = (g', reaching g')
   where
     g' = Graph (D.eliminate rets g) $ edges g
 
+peephole :: Opt
+peephole g _ _ = (g', reaching g')
+  where
+    g' = mkGraph $ P.peephole $ concat $ vertices g
+
 opts :: Int -> [Opt]
-opts n = concatMap (replicate n) [fold, cse, copy, cleanDead]
+opts n = concatMap (replicate n) [fold, cse, copy, cleanDead, peephole]
 
 flow :: [Opt] -> Q.TopDef -> Asm.TopDef
 flow opts (Q.FunDef rets name args qs) = Asm.FunDef (zip bs alives) rets name args
@@ -74,7 +80,7 @@ frontend code = case parse code >>= semantic of
 generate :: A.Program -> [Opt] -> (String, String)
 generate prog opts =
     (intercalate "\n\n" $ map printDef atds,
-     intercalate "\n\n" (Asm.program consts atds) <> "\n")
+     intercalate "\n" (Asm.program consts atds) <> "\n")
   where
     atds = map (flow opts) tds
     Q.Program consts tds = I.program prog

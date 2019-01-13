@@ -29,6 +29,7 @@ library
                        Intermediate.Fold,
                        Intermediate.Copy,
                        Intermediate.Dead,
+                       Intermediate.Peephole,
                        Asm.Generate,
                        Asm.Entry,
                        Common,

@@ -35,7 +35,7 @@ data Expr
 data Op = Plus | Minus | Times | Div | Mod
     deriving Eq
 
-data OptD = Fold | CSE | Copy | Dead
+data OptD = Fold | CSE | Copy | Dead | Peephole
     deriving (Eq, Show)
 
 newtype Name = Name String
@@ -63,12 +63,16 @@ instance Show Expr where
 
 type FVar = (Int, Name)
 
+avalOpts :: [OptD]
+avalOpts = [Fold, CSE, Copy, Dead, Peephole]
+
 toOpt :: OptD -> Opt
 toOpt = \case
-    Fold -> fold
-    CSE  -> cse
-    Copy -> copy
-    Dead -> cleanDead
+    Fold     -> fold
+    CSE      -> cse
+    Copy     -> copy
+    Dead     -> cleanDead
+    Peephole -> peephole
 
 
 expr :: Int -> Gen Expr
@@ -220,7 +224,7 @@ prop_CalcExpr e =
     not (hasDivideByZero vs e) && depth e > 1 ==>
     let p = simpleProgram e vs in counterexample (pProg p) $
     let expected = eval vs e in counterexample ("expected: " ++ show expected) $
-    forAll (resize 12 $ listOf $ elements [Fold, CSE, Copy, Dead]) $ \opts ->
+    forAll (resize (4 * length avalOpts) $ listOf $ elements avalOpts) $ \opts ->
     collect opts $
     monadicIO $ do
         --traceM $ "testing expr: " ++ show e
