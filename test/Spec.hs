@@ -35,7 +35,7 @@ data Expr
 data Op = Plus | Minus | Times | Div | Mod
     deriving Eq
 
-data FOpt = Fold | CSE | Copy
+data OptD = Fold | CSE | Copy | Dead
     deriving (Eq, Show)
 
 newtype Name = Name String
@@ -63,11 +63,13 @@ instance Show Expr where
 
 type FVar = (Int, Name)
 
-toOpt :: FOpt -> ForwardOpt
+toOpt :: OptD -> Opt
 toOpt = \case
     Fold -> fold
     CSE  -> cse
     Copy -> copy
+    Dead -> cleanDead
+
 
 expr :: Int -> Gen Expr
 expr 0 = frequency $ [(1, Const <$> arbitrary), (1, Var <$> arbitrary)]
@@ -218,7 +220,7 @@ prop_CalcExpr e =
     not (hasDivideByZero vs e) && depth e > 1 ==>
     let p = simpleProgram e vs in counterexample (pProg p) $
     let expected = eval vs e in counterexample ("expected: " ++ show expected) $
-    forAll (resize 12 $ listOf $ elements [Fold, CSE, Copy]) $ \opts ->
+    forAll (resize 12 $ listOf $ elements [Fold, CSE, Copy, Dead]) $ \opts ->
     collect opts $
     monadicIO $ do
         --traceM $ "testing expr: " ++ show e

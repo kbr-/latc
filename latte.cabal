@@ -28,6 +28,7 @@ library
                        Intermediate.CSE,
                        Intermediate.Fold,
                        Intermediate.Copy,
+                       Intermediate.Dead,
                        Asm.Generate,
                        Asm.Entry,
                        Common,

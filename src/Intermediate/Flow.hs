@@ -39,9 +39,9 @@ splitBlocks qs = reverse . map reverse . fst . foldl step ([[]], False) $ qs
         _      -> False
 
     jumpsTo l = \case
-        Jump l           -> True
-        CondJump _ _ _ l -> True
-        _                -> False
+        Jump l' | l == l'           -> True
+        CondJump _ _ _ l' | l == l' -> True
+        _                           -> False
 
 incoming :: [[Int]] -> [[Int]]
 incoming edges = map ((\i -> map fst . filter (\(_, es) -> elem i es) $ ies) . fst) ies

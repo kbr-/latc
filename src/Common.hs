@@ -25,5 +25,10 @@ vars' = concatMap $ \case
     Var v -> [v]
     _     -> []
 
+hasEffects :: Exp -> Bool
+hasEffects = \case
+    Call _ _ -> True
+    _        -> False
+
 sortWithM :: (Applicative m, Ord b) => (a -> m b) -> [a] -> m [a]
 sortWithM f l = (map fst . sortBy (compare `on` snd)) <$> traverse (\x -> (x, ) <$> f x) l

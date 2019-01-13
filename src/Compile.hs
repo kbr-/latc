@@ -22,34 +22,40 @@ import qualified Annotated as A
 import qualified Asm.Generate as Asm
 import qualified Intermediate.Fold as F
 import qualified Intermediate.Copy as C
+import qualified Intermediate.Dead as D
 import qualified Quad as Q
 import qualified Intermediate.Generate as I
 
 type Pos = Maybe (Int, Int)
 
-type ForwardOpt = Graph Block -> [Defs] -> (Graph Block, [Defs])
+type Opt = Graph Block -> Bool -> [Defs] -> (Graph Block, [Defs])
 
-fold :: ForwardOpt
-fold g ds = (g', reaching g')
+fold :: Opt
+fold g _ ds = (g', reaching g')
   where
     g' = Graph bs $ mkEdges bs
     bs = F.fold g ds
 
-cse :: ForwardOpt
-cse g ds = (Graph (eliminate g ds) $ edges g, ds)
+cse :: Opt
+cse g _ ds = (Graph (eliminate g ds) $ edges g, ds)
 
-copy :: ForwardOpt
-copy g ds = (Graph (C.copy g ds) $ edges g, ds)
+copy :: Opt
+copy g _ ds = (Graph (C.copy g ds) $ edges g, ds)
 
-forwardOpts :: Int -> [ForwardOpt]
-forwardOpts n = concatMap (replicate n) [fold, cse, copy]
+cleanDead :: Opt
+cleanDead g rets _ = (g', reaching g')
+  where
+    g' = Graph (D.eliminate rets g) $ edges g
 
-flow :: [ForwardOpt] -> Q.TopDef -> Asm.TopDef
+opts :: Int -> [Opt]
+opts n = concatMap (replicate n) [fold, cse, copy, cleanDead]
+
+flow :: [Opt] -> Q.TopDef -> Asm.TopDef
 flow opts (Q.FunDef rets name args qs) = Asm.FunDef (zip bs alives) rets name args
   where
     bs = vertices graph'
     alives = liveness rets graph'
-    graph' = fst $ foldl (\(g, ds) opt -> opt g ds) (graph, reaching graph) opts
+    graph' = fst $ foldl (\(g, ds) opt -> opt g rets ds) (graph, reaching graph) opts
     graph = mkGraph qs
 
 parse :: String -> Either String (T.Program Pos)
@@ -65,7 +71,7 @@ frontend code = case parse code >>= semantic of
     Left err -> hPutStrLn stderr ("ERROR\n" ++ err) *> exitFailure
     Right x  -> hPutStrLn stderr "OK" *> pure x
 
-generate :: A.Program -> [ForwardOpt] -> (String, String)
+generate :: A.Program -> [Opt] -> (String, String)
 generate prog opts =
     (intercalate "\n\n" $ map printDef atds,
      intercalate "\n\n" (Asm.program consts atds) <> "\n")

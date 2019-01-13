@@ -209,10 +209,6 @@ quad q uses = {- deb <* traceM ("quad: " ++ P.printQuad q) <* -}case q of
     alives :: S.Set Q.Var
     alives = M.keysSet uses
 
-    hasEffects :: Q.Exp -> Bool
-    hasEffects (Q.Call _ _) = True
-    hasEffects _          = False
-
 moveToReg :: [Reg] -> S.Set Q.Var -> Q.Arg -> Uses -> Z Reg
 moveToReg exclude alives v uses = do
     r <- chooseRegister exclude Nothing Nothing uses
