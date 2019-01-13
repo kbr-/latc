@@ -29,10 +29,11 @@ needednessBlock qs n = foldr update n qs
 
 dead :: Quad -> Needs -> Bool
 dead q n = not $ case q of
-    Assign v e       -> hasEffects e || needed v n
-    Exp e            -> hasEffects e
-    CondJump _ _ _ _ -> True
-    _                -> True
+    Assign v (Val (Var v')) | v == v' -> False
+    Assign v e                        -> hasEffects e || needed v n
+    Exp e                             -> hasEffects e
+    CondJump _ _ _ _                  -> True
+    _                                 -> True
 
 update :: Quad -> Needs -> Needs
 update q n = n & case q of
