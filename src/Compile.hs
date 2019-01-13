@@ -32,7 +32,8 @@ type ForwardOpt = Graph Block -> [Defs] -> (Graph Block, [Defs])
 fold :: ForwardOpt
 fold g ds = (g', reaching g')
   where
-    g' = mkGraph $ F.fold g ds
+    g' = Graph bs $ mkEdges bs
+    bs = F.fold g ds
 
 cse :: ForwardOpt
 cse g ds = (Graph (eliminate g ds) $ edges g, ds)

@@ -1,3 +1,4 @@
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeFamilies #-}
@@ -6,7 +7,9 @@ module Intermediate.Fold where
 
 import Prelude hiding (LT, GT, EQ)
 import Control.Lens
+import Control.Exception
 import Data.Maybe
+import Data.List
 import qualified Data.Map as M
 
 import Common
@@ -28,11 +31,21 @@ instance P.Propagable Consts where
     holds (Consts cs)      = cs
     empty                  = Consts M.empty
 
-fold :: Graph Block -> [Defs] -> [Quad]
-fold g = clean . concat . P.propagate @Consts g
+fold :: Graph Block -> [Defs] -> [Block]
+fold g = clean . P.propagate @Consts g
 
-clean :: [Quad] -> [Quad]
-clean = mapMaybe cleanJumps
+clean :: [Block] -> [Block]
+clean = cleanUnreachable . mkGraph . mapMaybe cleanJumps . concat
+
+cleanUnreachable :: Graph Block -> [Block]
+cleanUnreachable Graph{..} = map snd $ filter ((reachables !!) . fst) $ Common.indexed vertices
+  where
+    reachables = fixed step start
+    start = True : (map (const False) $ [1..cnt])
+    step rs = map (reachable rs) [0..cnt]
+    reachable rs i = rs !! i || (any $ \(j, ds) -> elem i ds && rs !! j) ies
+    ies = Common.indexed edges
+    cnt = length vertices - 1
 
 cleanJumps :: Quad -> Maybe Quad
 cleanJumps = \case

@@ -21,7 +21,7 @@ mkGraph :: [Quad] -> Graph Block
 mkGraph qs = Graph{..}
   where
     vertices = splitBlocks qs
-    edges = edges' vertices
+    edges = mkEdges vertices
 
 splitBlocks :: [Quad] -> [Block]
 splitBlocks qs = reverse . map reverse . fst . foldl step ([[]], False) $ qs
@@ -47,8 +47,8 @@ incoming :: [[Int]] -> [[Int]]
 incoming edges = map ((\i -> map fst . filter (\(_, es) -> elem i es) $ ies) . fst) ies
   where ies = indexed edges
 
-edges' :: [Block] -> [[Int]]
-edges' bs = map dests ibs
+mkEdges :: [Block] -> [[Int]]
+mkEdges bs = map dests ibs
   where
     dests :: (Int, Block) -> [Int]
     dests (i, b) = case assert (not $ null b) $ last b of

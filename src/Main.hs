@@ -18,7 +18,7 @@ main = do
         _        -> putStrLn "Usage: latc_x86 <file>" *> exitFailure
     prog <- frontend code
 
-    let (quads, asm) = generate prog $ forwardOpts 1
+    let (quads, asm) = generate prog $ forwardOpts 3
 
     let execFilePath = dropExtension filePath
         intFilePath = execFilePath <.> ".q"
