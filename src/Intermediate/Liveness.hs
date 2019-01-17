@@ -42,10 +42,11 @@ nextUses qs aliveEnd = (reverse *** (M.keysSet . fst)) . flip runState start . f
   where
     update :: Int -> Quad -> Uses -> Uses
     update i = \case
-        Assign v e         -> flip (foldr $ useVar i) (vars e) . kill v
-        CondJump a1 _ a2 _ -> flip (foldr $ useVar i) $ vars' [a1, a2]
-        Exp e              -> flip (foldr $ useVar i) $ vars e
-        _                  -> id
+        Assign v e           -> flip (foldr $ useVar i) (vars e) . kill v
+        Store (Ptr b ix _) a -> flip (foldr $ useVar i) $ vars' [Var b, ix, a]
+        CondJump a1 _ a2 _   -> flip (foldr $ useVar i) $ vars' [a1, a2]
+        Exp e                -> flip (foldr $ useVar i) $ vars e
+        _                    -> id
 
     kill :: Var -> Uses -> Uses
     kill = M.delete

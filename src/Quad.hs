@@ -25,7 +25,7 @@ data Exp
 
 type Var = String
 
-data Ptr = Ptr Var Arg
+data Ptr = Ptr Var Arg Int
     deriving (Eq, Ord)
 
 data Arg

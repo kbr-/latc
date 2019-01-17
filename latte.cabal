@@ -49,6 +49,7 @@ executable latc
                        latte
 
 executable latc_x86
+  GHC-Options:         -Wall
   main-is:             src/Main.hs
   default-language:    Haskell2010
   build-depends:       base >= 4.7 && < 5,

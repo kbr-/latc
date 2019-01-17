@@ -153,19 +153,18 @@ stmt (T.While e s) = do
 stmt (T.ForEach x a s) = do
     x <- getVar x
     a <- getVar a
-    [i, t, n] <- replicateM 3 newTemp
+    [i, n] <- replicateM 2 newTemp
     traverse emit
         [ Assign i $ Val $ ConstI 0
-        , Assign t $ LoadPtr $ Ptr a $ ConstI 0
-        , Assign n $ BinInt (Var t) Times $ ConstI 4
+        , Assign n $ LoadPtr $ Ptr a (ConstI 0) 0
         ]
     lCond <- newLabel
     lBody <- newLabel
     traverse emit
         [ Jump lCond
         , Mark lBody
-        , Assign i $ BinInt (Var i) Plus $ ConstI 4
-        , Assign x $ LoadPtr $ Ptr a $ Var i
+        , Assign x $ LoadPtr $ Ptr a (Var i) 1
+        , Assign i $ BinInt (Var i) Plus $ ConstI 1
         ]
     stmt s
     emit $ Mark lCond
@@ -175,9 +174,9 @@ stmt (T.SExp e) = Exp <$> expr e >>= emit
 
 assign :: T.LVal -> T.Expr -> Gen ()
 assign lv e = emit =<< case lv of
-    T.Var v -> Assign <$> getVar v <*> expr e
-    T.ArrElem v e -> Store <$> (Ptr <$> getVar v <*> arrayIndex e) <*> argExpr e
-    T.Attr v a -> do
+    T.Var v        -> Assign <$> getVar v <*> expr e
+    T.ArrElem v e' -> Store <$> (Ptr <$> getVar v <*> argExpr e' <*> pure 1) <*> argExpr e
+    T.Attr v a     -> do
         (v, typ) <- getVar' v
         Store <$> attr a v typ <*> argExpr e
 
@@ -224,31 +223,22 @@ argExpr e = expr e >>= \case
     Val a -> pure a
     e     -> Var <$> expTemp e
 
-arrayIndex :: T.Expr -> Gen Arg
-arrayIndex e = do
-    t <- argExpr e
-    ix <- newTemp
-    r <- newTemp
-    emit $ Assign ix $ BinInt t Plus (ConstI 1) -- index 0 holds length of the array
-    emit $ Assign r $ BinInt (Var ix) Times (ConstI 4)
-    pure $ Var r
-
 attr :: T.Attr -> Var -> T.Type -> Gen Ptr
 attr a v typ = case a of
-    T.ALeaf i -> pure $ Ptr v $ ConstI $ structIndex typ i
+    T.ALeaf i -> pure $ Ptr v (ConstI $ structIndex typ i) 0
     T.AArr i e -> do
         t <- newTemp
-        emit $ Assign t $ LoadPtr  $ Ptr v $ ConstI $ structIndex typ i
-        Ptr t <$> arrayIndex e
+        emit $ Assign t $ LoadPtr  $ Ptr v (ConstI $ structIndex typ i) 0
+        Ptr t <$> argExpr e <*> pure 0
     T.AStruct i a -> do
         t <- newTemp
-        emit $ Assign t $ LoadPtr  $ Ptr v $ ConstI $ structIndex typ i
+        emit $ Assign t $ LoadPtr  $ Ptr v (ConstI $ structIndex typ i) 0
         attr a t $ structType typ i
   where
     structIndex (T.Arr _) i = assert (i == "length") 0
     structIndex (T.Struct ms) i =
         let ix = findIndex ((== i) . fst) ms
-         in assert (isJust ix) $ fromIntegral $ 4 * fromJust ix
+         in assert (isJust ix) $ fromIntegral $ fromJust ix
 
     structType (T.Struct ms) i =
         let t = lookup i ms in assert (isJust t) $ fromJust t
@@ -257,7 +247,7 @@ expr :: T.Expr -> Gen Exp
 
 expr (T.EVar lv) = case lv of
     T.Var v       -> Val . Var <$> getVar v
-    T.ArrElem v e -> LoadPtr <$> (Ptr <$> getVar v <*> arrayIndex e)
+    T.ArrElem v e -> LoadPtr <$> (Ptr <$> getVar v <*> argExpr e <*> pure 1)
     T.Attr v a    -> getVar' v >>= fmap LoadPtr . uncurry (attr a)
 
 expr (T.ELitInt x) = pure . Val $ ConstI x

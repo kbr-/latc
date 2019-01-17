@@ -46,5 +46,7 @@ char* _concat(const char* s1, const char* s2) {
 }
 
 char* _new(int n) {
-    return malloc(4*(n+1));
+    char* r =  malloc(4*(n+1));
+    ((int*)r)[0] = n;
+    return r;
 }

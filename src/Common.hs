@@ -15,10 +15,11 @@ fixed f = head . dropWhile (\x -> x /= f x) . iterate f
 
 vars :: Exp -> [Var]
 vars = \case
-    BinInt a1 _ a2 -> vars' [a1, a2]
-    Load _         -> []
-    Val a          -> vars' [a]
-    Call _ as      -> vars' as
+    BinInt a1 _ a2    -> vars' [a1, a2]
+    Load _            -> []
+    Val a             -> vars' [a]
+    Call _ as         -> vars' as
+    LoadPtr (Ptr b i _) -> vars' [Var b, i]
 
 vars' :: [Arg] -> [Var]
 vars' = concatMap $ \case

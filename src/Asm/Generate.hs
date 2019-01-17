@@ -188,6 +188,16 @@ quad q uses = {- deb <* traceM ("quad: " ++ P.printQuad q) <* -}case q of
                 remove v
                 addVar v l
         mapM_ (freeDesc alives) $ vars e
+    Q.Store (Q.Ptr b i d) a -> do
+        let uses' = useVar' a uses
+
+        ra <- moveToReg [] alives a uses'
+        rb <- moveToReg [ra] alives (Q.Var b) uses'
+        ri <- moveToReg [ra, rb] alives i uses'
+
+        emit $ movl (reg ra) $ ptr rb ri d
+
+        mapM_ (freeDesc alives) $ vars' [Q.Var b, i, a]
     Q.Jump l -> saveEndLoc *> emit (jmp l)
     Q.Mark l -> emit $ label l
     Q.Exp e -> do
@@ -210,20 +220,22 @@ quad q uses = {- deb <* traceM ("quad: " ++ P.printQuad q) <* -}case q of
     alives = M.keysSet uses
 
 moveToReg :: [Reg] -> S.Set Q.Var -> Q.Arg -> Uses -> Z Reg
-moveToReg exclude alives v uses = do
-    r <- chooseRegister exclude Nothing Nothing uses
-    whenM (dirtyReg (M.keysSet uses) r) $ spill alives r
+moveToReg exclude alives v uses = locate v >>= \case
+    AReg r | not $ elem r exclude -> pure r
+    otherwise -> do
+        r <- chooseRegister exclude Nothing Nothing uses
+        whenM (dirtyReg (M.keysSet uses) r) $ spill alives r
 
-    m <- locate v
-    emitWithComment (movl m (reg r)) $ P.printArg v
-    case m of
-        AConst _ -> clear r
-        AReg r'  -> move r' r
-        AMem m   -> copy m r
+        m <- locate v
+        emitWithComment (movl m (reg r)) $ P.printArg v
+        case m of
+            AConst _ -> clear r
+            AReg r'  -> move r' r
+            AMem m   -> copy m r
 
-    saveReg r
+        saveReg r
 
-    pure r
+        pure r
 
 expr :: Q.Exp -> Maybe Q.Var -> String -> Uses -> Z Loc
 expr e finalVar comment uses = case e of
@@ -252,9 +264,8 @@ expr e finalVar comment uses = case e of
         inEax <- (== Just eax) <$> getReg' v1
 
         m2 <- locate v2 >>= \case
-            m@(AMem _)                             -> pure m
-            m@(AReg r') | not $ elem r' [eax, edx] -> pure m
-            _                                      -> reg <$> moveToReg [eax, edx] alives v2 uses''
+            m@(AMem _) -> pure m
+            _          -> reg <$> moveToReg [eax, edx] alives v2 uses''
 
         whenM (dirtyReg alives' eax) $ spill alives eax
         -- so that vars from eax don't get spilled over from edx
@@ -300,6 +311,22 @@ expr e finalVar comment uses = case e of
             emit $ addl (con $ fromIntegral $ 4 * length as) (reg esp)
         mapM_ clear callerSaveRegs
         pure $ Loc eax
+    Q.LoadPtr (Q.Ptr b i d) -> do
+        let uses' = useVar' (Q.Var b) $ useVar' i uses
+            alives' = M.keysSet uses'
+
+        r <- chooseRegister [] finalVar Nothing uses'
+        whenM (dirtyReg alives' r) $ spill alives r
+
+        rb <- moveToReg [r] alives (Q.Var b) uses'
+        ri <- moveToReg [rb, r] alives i uses'
+
+        emit $ movl (ptr rb ri d) $ reg r
+        clear r
+
+        saveReg r
+
+        pure $ Loc r
   where
     alives :: S.Set Q.Var
     alives = M.keysSet uses

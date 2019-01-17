@@ -39,7 +39,7 @@ printExp = \case
     LoadPtr e       -> printPtr e
 
 printPtr :: Ptr -> String
-printPtr (Ptr v a) = v <> "[" <> printArg a <> "]"
+printPtr (Ptr b i d) = b <> "[" <> printArg i <> " + " <> show d <>  "]"
 
 printArg :: Arg -> String
 printArg = \case

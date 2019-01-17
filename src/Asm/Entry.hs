@@ -20,6 +20,7 @@ data Arg
     | AMem Memloc
     | AConst Integer
     | ALab Q.Label
+    | APtr Reg Reg Int
 
 type Entry = String
 
@@ -95,6 +96,10 @@ printArg = \case
     AMem (Memloc off) -> show off <> "(%ebp)"
     AConst i          -> "$" <> show i
     ALab l            -> Q.name l
+    APtr r1 r2 i      -> show (4*i) <> "(" <> printArg (AReg r1) <> ", " <> printArg (AReg r2) <> ", 4)"
+
+ptr :: Reg -> Reg -> Int -> Arg
+ptr = APtr
 
 retl :: Entry
 retl = "retl"
