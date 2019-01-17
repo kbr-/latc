@@ -1,35 +1,76 @@
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE FlexibleContexts #-}
 module Semantic.Expr where
 
 import qualified Annotated as AT
 import qualified AbsLatte as T
 import qualified Data.Map as M
 import Semantic.Common
+import Semantic.ErrorT
 import Data.Monoid
 import Data.Functor.Identity
+import Control.Arrow
 import Control.Monad
 import Control.Monad.Except
 import Control.Monad.Reader
 
-type ZE = ExceptT Err (ReaderT Symbols Identity)
+class HasSyms m where
+    getVar :: AT.Ident -> m (Maybe (AT.VarId, AT.Type))
+    getFun :: AT.Ident -> m (Maybe AT.FunType)
 
-data Symbols = Symbols
-    { vars :: M.Map AT.Ident (AT.VarId, AT.Type)
-    , funs :: M.Map AT.Ident AT.FunType
-    }
+findMemTyp :: (MonadReport Err m, HasSyms m) => Pos -> [(AT.Ident, AT.Type)] -> AT.Ident -> m AT.Type
+findMemTyp pos ms i = case lookup i ms of
+    Nothing  -> errorWithPos pos $ noMember i
+    Just typ -> pure typ
 
-runZE :: Symbols -> ZE (AT.Expr, AT.Type) -> Either Err (AT.Expr, AT.Type)
-runZE sym = runIdentity . flip runReaderT sym . runExceptT
+var :: (MonadReport Err m, HasSyms m) => Pos -> T.Ident -> m (AT.VarId, AT.Type)
+var pos (T.Ident i) = getVar i >>= \case
+    Just x  -> pure x
+    Nothing -> errorWithPos pos $ undeclaredVariable i
 
-expr :: T.Expr Pos -> ZE (AT.Expr, AT.Type)
+arrElem :: (MonadReport Err m, HasSyms m) => Pos -> AT.Type -> T.Expr Pos -> m (AT.Expr, AT.Type)
+arrElem pos arrTyp e = do
+    elTyp <- case arrTyp of
+        AT.Arr t -> pure t
+        t        -> errorWithPos pos $ cannotIndex t
+    (el, ixTyp) <- expr e
+    unless (ixTyp == AT.Int) $
+        errorWithPos pos $ indexMustBeInt ixTyp
+    pure $ (el, elTyp)
 
-expr (T.EVar pos (T.Ident str)) = do
-    (varId, t) <- reader (M.lookup str . vars) >>= \case
-        Just x  -> pure x
-        Nothing -> errorWithPos pos $ undeclaredVariable str
-    pure (AT.EVar (AT.LVal varId), t)
+attr :: (MonadReport Err m, HasSyms m) => Pos -> AT.Type -> T.LVal Pos -> m (AT.Attr, AT.Type)
+attr pos strucTyp lv = case strucTyp of
+    AT.Arr _ -> case lv of
+        T.Var _ (T.Ident s) | s == "length" -> pure $ (AT.ALeaf s, AT.Int)
+        _ -> errorWithPos pos $ illegalArrAttr
+    AT.Struct ms -> case lv of
+        T.Var pos (T.Ident s) -> do
+            memTyp <- findMemTyp pos ms s
+            pure (AT.ALeaf s, memTyp)
+        T.ArrElem pos (T.Ident s) e -> do
+            memTyp <- findMemTyp pos ms s
+            (el, elTyp) <- arrElem pos memTyp e
+            pure (AT.AArr s el, elTyp)
+        T.Attr pos (T.Ident s) lv' -> do
+            memTyp <- findMemTyp pos ms s
+            first (AT.AStruct s) <$> attr pos memTyp lv'
+    t -> errorWithPos pos $ typNotStruct t
+
+lval :: (MonadReport Err m, HasSyms m) => T.LVal Pos -> m (AT.LVal, AT.Type)
+lval (T.Var pos i) = first AT.Var <$> var pos i
+lval (T.ArrElem pos i e) = do
+    (a, arrTyp) <- var pos i
+    (el, elTyp) <- arrElem pos arrTyp e
+    pure (AT.ArrElem a el, elTyp)
+lval (T.Attr pos i lv) = do
+    (v, t) <- var pos i
+    first (AT.Attr v) <$> attr pos t lv
+
+expr :: (MonadReport Err m, HasSyms m) => T.Expr Pos -> m (AT.Expr, AT.Type)
+
+expr (T.EVar _ lv) = first AT.EVar <$> lval lv
 
 expr (T.ELitInt _ x) =
     pure (AT.ELitInt x, AT.Int)
@@ -42,12 +83,19 @@ expr (T.ELitFalse _) =
 
 expr (T.EApp pos (T.Ident str) es) = do
     aes <- mapM expr es
-    AT.FunType retType argTypes <- reader (M.lookup str . funs) >>= \case
+    AT.FunType retType argTypes <- getFun str >>= \case
         Just x  -> pure x
         Nothing -> errorWithPos pos $ unknownFun str
     let ts = map snd aes
     unless (argTypes == ts) $ errorWithPos pos $ argTypeMismatch argTypes ts
     pure (AT.EApp str (map fst aes), retType)
+
+expr (T.ENew pos typ e) = do
+    (e, lenTyp) <- expr e
+    unless (lenTyp == AT.Int) $
+        errorWithPos pos $ arrLengthMustBeInt lenTyp
+    let typ' = annBType typ
+    pure $ (AT.ENew typ' e, AT.Arr typ')
 
 expr (T.EString _ str) =
     pure (AT.EString str, AT.Str)
@@ -153,3 +201,27 @@ cannotCompareOrd t1 =
 cannotBoolOp :: AT.Type -> AT.Type -> Err
 cannotBoolOp t1 t2 =
     "Cannot perform logical operation on expressions of type " <> show t1 <> " and " <> show t2
+
+cannotIndex :: AT.Type -> Err
+cannotIndex t =
+    "Cannot index a variable of type " <> show t
+
+indexMustBeInt  :: AT.Type -> Err
+indexMustBeInt t =
+    "Array index must be of type int, not " <> show t
+
+illegalArrAttr :: Err
+illegalArrAttr =
+    "Illegal attribute for array"
+
+noMember :: AT.Ident -> Err
+noMember i =
+    "No member called" <> i
+
+typNotStruct :: AT.Type -> Err
+typNotStruct t =
+    "Type " <> show t <> " has no members"
+
+arrLengthMustBeInt :: AT.Type -> Err
+arrLengthMustBeInt t =
+    "Array length must be int, not " <> show t

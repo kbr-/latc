@@ -1,4 +1,5 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE LambdaCase #-}
 module Semantic.Common where
 
 import qualified AbsLatte as T
@@ -12,26 +13,26 @@ type Pos = Maybe (Int, Int)
 
 type Err = String
 
-errorWithPos :: MonadError Err m => Pos -> Err -> m a
-errorWithPos pos err = throwError $ err <> posString pos
-
-reportErrorWithPos :: Monad m => Pos -> Err -> ErrorT Err m a
-reportErrorWithPos pos err = reportError $ err <> posString pos
+errorWithPos :: MonadReport Err m => Pos -> Err -> m a
+errorWithPos pos err = reportError $ err <> posString pos
 
 posString :: Pos -> String
 posString (Just (line, col)) = "\nat line " <> show line <> ", column " <> show col
 posString _                  = ""
 
-annRetType :: Monad m => T.Type Pos -> ErrorT Err m AT.Type
+annRetType :: MonadReport Err m => T.Type Pos -> m AT.Type
 annRetType (T.Void _) = pure AT.Void
 annRetType typ = annType typ
 
-annType :: Monad m => T.Type Pos -> ErrorT Err m AT.Type
-annType (T.Int _)           = pure AT.Int
-annType (T.Str _)           = pure AT.Str
-annType (T.Bool _)          = pure AT.Bool
-annType typ@(T.Void pos)    = reportErrorWithPos pos $ invalidType "void"
-annType typ@(T.Fun pos _ _) = reportErrorWithPos pos $ invalidType "function type"
+annType :: MonadReport Err m => T.Type Pos -> m AT.Type
+annType (T.BType _ typ) = pure $ annBType typ
+annType (T.Arr _ typ)   = pure $ AT.Arr $ annBType typ
+annType (T.Void pos)    = errorWithPos pos $ invalidType "void"
+
+annBType :: T.BType Pos -> AT.Type
+annBType (T.Int _)  = AT.Int
+annBType (T.Str _)  = AT.Str
+annBType (T.Bool _) = AT.Bool
 
 undeclaredVariable :: AT.Ident -> Err
 undeclaredVariable ident = "Undeclared variable: " <> ident

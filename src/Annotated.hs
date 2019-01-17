@@ -28,18 +28,19 @@ data Stmt
     | BStmt Block
     | Decl Type [Item]
     | Ass LVal Expr
-    | Incr LVal
-    | Decr LVal
+    | Incr VarId
+    | Decr VarId
     | Ret Expr
     | VRet
     | Cond Expr Stmt
     | CondElse Expr Stmt Stmt
     | While Expr Stmt
+    | ForEach VarId VarId Stmt
     | SExp Expr
 
-data Item = NoInit LVal | Init LVal Expr
+data Item = NoInit VarId | Init VarId Expr
 
-data Type = Int | Str | Bool | Void
+data Type = Int | Str | Bool | Void | Arr Type | Struct [(Ident, Type)]
     deriving (Eq, Show)
 
 data FunType = FunType Type [Type]
@@ -50,6 +51,7 @@ data Expr
     | ELitTrue
     | ELitFalse
     | EApp Ident [Expr]
+    | ENew Type Expr
     | EString String
     | Neg Expr
     | Not Expr
@@ -61,7 +63,16 @@ data Expr
     | EOr Expr Expr
     deriving Eq
 
-data LVal = LVal VarId
+data LVal
+    = Var VarId
+    | ArrElem VarId Expr
+    | Attr VarId Attr
+    deriving Eq
+
+data Attr
+    = ALeaf Ident
+    | AArr Ident Expr
+    | AStruct Ident Attr
     deriving Eq
 
 data AddOp = Plus | Minus

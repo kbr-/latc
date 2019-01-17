@@ -1,6 +1,7 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE UndecidableInstances #-}
 -- Processing multiple items that may fail and keeping all the errors.
 
@@ -8,6 +9,7 @@ module Semantic.ErrorT where
 
 import Control.Monad.State.Strict
 import Control.Monad.Trans.Maybe
+import Control.Monad.Except
 import Control.Arrow
 
 newtype ErrorT e m a = ErrorT (MaybeT (StateT [e] m) a)
@@ -20,6 +22,12 @@ instance MonadState s m => MonadState s (ErrorT e m) where
     get = lift get
     put = lift . put
     state = lift . state
+
+class Monad m => MonadReport e m | m -> e where
+    reportError :: e -> m a
+
+instance Monad m => MonadReport e (ErrorT e m) where
+    reportError e = reportErrors [e]
 
 runErrorT :: Functor m => ErrorT e m a -> m (Either [e] a)
 runErrorT (ErrorT m) = fmap mkEither . flip runStateT [] . runMaybeT $ m
@@ -40,9 +48,6 @@ fromError = fromErrors . left pure
 fromErrors :: Monad m => Either [e] a -> ErrorT e m a
 fromErrors (Left e)  = reportErrors e
 fromErrors (Right x) = pure x
-
-reportError :: Monad m => e -> ErrorT e m a
-reportError e = reportErrors [e]
 
 reportErrors :: Monad m => [e] -> ErrorT e m a
 reportErrors e = ErrorT $ mapM (modify . (:)) e *> fail ""

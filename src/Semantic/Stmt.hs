@@ -1,13 +1,16 @@
+{-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE FlexibleInstances #-}
 module Semantic.Stmt where
 
 import qualified Annotated as AT
 import qualified AbsLatte as T
-import qualified Semantic.Expr as SE
 import qualified Data.Map as M
 import Semantic.Common
 import Semantic.ErrorT
+import Semantic.Expr
 import Data.Functor.Identity
 import Data.Maybe
 import Data.Monoid
@@ -30,6 +33,10 @@ data Scope = Scope
     { vars :: M.Map AT.Ident (AT.VarId, AT.Type)
     }
 
+instance HasSyms ZS where
+    getVar v = M.lookup v . vars . head . scopeStack <$> get
+    getFun f = M.lookup f . funs <$> get
+
 runStmts :: Env -> [T.Stmt Pos] -> Either [Err] ([AT.Stmt], M.Map AT.VarId AT.VarInfo)
 runStmts env ss = case flip runState env . runErrorT . runAll . map stmt $ ss of
     (Left errs, _)     -> throwError errs
@@ -46,7 +53,7 @@ popScope = modify $ \e@Env{..} ->
 newVar :: Pos -> AT.Type -> AT.Ident -> ZS AT.VarId
 newVar pos typ ident = do
     declared <- localDeclared ident . scopeStack <$> get
-    when declared . reportErrorWithPos pos $ alreadyDeclared ident
+    when declared . errorWithPos pos $ alreadyDeclared ident
     varId <- nextVarId <$> get
     currentScope <- head . scopeStack <$> get
     modify $ \e@Env{..} ->
@@ -60,18 +67,8 @@ newVar pos typ ident = do
     localDeclared str [s] = M.member str $ vars s
     localDeclared str (s:s':_) = M.member str (vars s) && (M.notMember str (vars s'))
 
-getVar :: Pos -> String -> ZS (AT.VarId, AT.Type)
-getVar pos str = vars . head . scopeStack <$> get >>= \vs ->
-    case M.lookup str vs of
-        Just x  -> pure x
-        Nothing -> reportErrorWithPos pos $ undeclaredVariable str
-
 getRetType :: ZS AT.Type
 getRetType = funRetType <$> get
-
-runExpr :: T.Expr Pos -> ZS (AT.Expr, AT.Type)
-runExpr e = get >>= \Env{..} ->
-    fromError . SE.runZE SE.Symbols { vars = vars (head scopeStack), funs = funs } $ SE.expr e
 
 stmt :: T.Stmt Pos -> ZS AT.Stmt
 
@@ -92,38 +89,39 @@ stmt (T.Decl _ typ items) = do
     item :: AT.Type -> T.Item Pos -> ZS AT.Item
     item typ (T.NoInit pos (T.Ident ident)) = do
         varId <- newVar pos typ ident
-        pure $ AT.NoInit (AT.LVal varId)
+        pure $ AT.NoInit varId
     item typ (T.Init pos (T.Ident ident) e) = do
-        (ae, t) <- runExpr e
-        unless (t == typ) . reportErrorWithPos pos $ varTypeMismatch t typ
+        (ae, t) <- expr e
+        unless (t == typ) . errorWithPos pos $ varTypeMismatch t typ
         varId <- newVar pos typ ident
-        pure $ AT.Init (AT.LVal varId) ae
+        pure $ AT.Init varId ae
 
-stmt (T.Ass pos (T.Ident ident) e) = do
-    (ae, t) <- runExpr e
-    (varId, typ) <- getVar pos ident
-    unless (t == typ) . reportErrorWithPos pos $ varTypeMismatch t typ
-    pure $ AT.Ass (AT.LVal varId) ae
+stmt (T.Ass pos lv e) = do
+    (lv, lvTyp) <- lval lv
+    (e, eTyp) <- expr e
+    unless (lvTyp == eTyp) $
+        errorWithPos pos $ varTypeMismatch lvTyp eTyp
+    pure $ AT.Ass lv e
 
-stmt (T.Incr pos (T.Ident ident)) = do
-    (varId, typ) <- getVar pos ident
-    unless (typ == AT.Int) . reportErrorWithPos pos $ cannotIncr typ
-    pure $ AT.Incr (AT.LVal varId)
+stmt (T.Incr pos i) = do
+    (varId, typ) <- var pos i
+    unless (typ == AT.Int) . errorWithPos pos $ cannotIncr typ
+    pure $ AT.Incr varId
 
-stmt (T.Decr pos (T.Ident ident)) = do
-    (varId, typ) <- getVar pos ident
-    unless (typ == AT.Int) . reportErrorWithPos pos $ cannotDecr typ
-    pure $ AT.Decr (AT.LVal varId)
+stmt (T.Decr pos i) = do
+    (varId, typ) <- var pos i
+    unless (typ == AT.Int) . errorWithPos pos $ cannotDecr typ
+    pure $ AT.Decr varId
 
 stmt (T.Ret pos e) = do
-    (ae, t) <- runExpr e
+    (ae, t) <- expr e
     typ <- getRetType
-    unless (t == typ) . reportErrorWithPos pos $ retTypeMismatch t typ
+    unless (t == typ) . errorWithPos pos $ retTypeMismatch t typ
     pure $ AT.Ret ae
 
 stmt (T.VRet pos) = do
     typ <- getRetType
-    unless (typ == AT.Void) . reportErrorWithPos pos $ mustReturnValue typ
+    unless (typ == AT.Void) . errorWithPos pos $ mustReturnValue typ
     pure AT.VRet
 
 stmt (T.Cond pos e s) =
@@ -135,12 +133,24 @@ stmt (T.CondElse pos e s1 s2) =
 stmt (T.While pos e s) =
     condStmt pos e $ (\as ae -> AT.While ae as) <$> stmt s
 
-stmt (T.SExp _ e) = AT.SExp . fst <$> runExpr e
+stmt (T.ForEach pos (annBType -> typ) (T.Ident x) a s) = do
+    (a, aTyp) <- var pos a
+    pushScope
+    x <- newVar pos typ x
+    case aTyp of
+        AT.Arr elTyp | elTyp /= typ -> errorWithPos pos $ arrTypeMismatch typ elTyp
+        AT.Arr _                    -> pure ()
+        _                           -> errorWithPos pos $ cannotIterate aTyp
+    s <- stmt s
+    popScope
+    pure $ AT.ForEach x a s
+
+stmt (T.SExp _ e) = AT.SExp . fst <$> expr e
 
 condStmt :: Pos -> T.Expr Pos -> ZS (AT.Expr -> AT.Stmt) -> ZS AT.Stmt
 condStmt pos e mf = do
-    ((ae, t), f) <- run2 (runExpr e) mf
-    unless (t == AT.Bool) . reportErrorWithPos pos $ condExprNotBool t
+    ((ae, t), f) <- run2 (expr e) mf
+    unless (t == AT.Bool) . errorWithPos pos $ condExprNotBool t
     pure $ f ae
 
 alreadyDeclared :: AT.Ident -> Err
@@ -157,7 +167,7 @@ cannotDecr t =
 
 varTypeMismatch :: AT.Type -> AT.Type -> Err
 varTypeMismatch exprTyp varTyp =
-    "Type " <> show varTyp <> " of variable doesn't match type " <> show exprTyp <> " of expression"
+    "Type " <> show varTyp <> " of left side doesn't match type " <> show exprTyp <> " of expression"
 
 retTypeMismatch :: AT.Type -> AT.Type -> Err
 retTypeMismatch exprTyp retTyp =
@@ -171,3 +181,11 @@ mustReturnValue t =
 condExprNotBool :: AT.Type -> Err
 condExprNotBool t =
     "Type of conditional expression must be " <> show AT.Bool <> ", not " <> show t
+
+arrTypeMismatch :: AT.Type -> AT.Type -> Err
+arrTypeMismatch elTyp arrElTyp =
+    "Type " <> show elTyp <> " of element doesn't match type " <> show arrElTyp <> " of array element"
+
+cannotIterate :: AT.Type -> Err
+cannotIterate t =
+    "Cannot iterate over variable of type " <> show t

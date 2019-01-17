@@ -12,7 +12,10 @@ pTopDef (FnDef _ typ ident args body) =
     pType typ ++ " " ++ pId ident ++ "(" ++ pArgs args ++ ") " ++ pBlock body
 
 pType :: Type a -> String
-pType (Int _) = "int"
+pType (BType _ btyp) = pBType btyp
+
+pBType :: BType a -> String
+pBType (Int _) = "int"
 
 pId :: Ident -> String
 pId (Ident x) = x
@@ -36,11 +39,14 @@ pItem (NoInit _ ident) = pId ident
 pItem (Init _ ident exp) = pId ident ++ " = " ++ pExp exp
 
 pExp :: Expr a -> String
-pExp (EVar _ ident) = pId ident
+pExp (EVar _ lv) = pLVal lv
 pExp (ELitInt _ x) = show x
 pExp (EApp _ ident as) = pId ident ++ "(" ++ intercalate ", " (map pExp as) ++ ")"
 pExp (EMul _ e1 op e2) = "(" ++ pExp e1 ++ " " ++ pMulOp op ++ " " ++ pExp e2 ++ ")"
 pExp (EAdd _ e1 op e2) = "(" ++ pExp e1 ++ " " ++ pAddOp op ++ " " ++ pExp e2 ++ ")"
+
+pLVal :: LVal a -> String
+pLVal (Var _ i) = pId i
 
 pAddOp :: AddOp a -> String
 pAddOp (Plus _) = "+"

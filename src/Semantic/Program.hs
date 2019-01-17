@@ -28,6 +28,7 @@ predefFuns = M.fromList
     ,("readInt",     AT.FunType AT.Int  [])
     ,("readString",  AT.FunType AT.Str  [])
     ,("_concat",     AT.FunType AT.Str  [AT.Str, AT.Str])
+    ,("_new",        AT.FunType (AT.Arr AT.Int) [AT.Int])
     ]
 
 type ZP = ErrorT Err Identity
@@ -50,7 +51,7 @@ def :: M.Map AT.Ident AT.FunType -> FunDef -> ZP AT.TopDef
 def funs FunDef{..} = do
     (body, locals) <- fromErrors . SS.runStmts env . fromBlock $ body
     when (funRetType /= AT.Void && not (alwaysReturn body)) $
-        reportErrorWithPos funPos $ mustReturn funIdent
+        errorWithPos funPos $ mustReturn funIdent
     pure AT.FunDef{..}
   where
     env = SS.Env
@@ -75,7 +76,7 @@ decl (T.FnDef pos typ (T.Ident ident) args body) = do
     retType <- annRetType typ
     (argTypes, args) <- fromErrors . runArgs $ args
     declared <- S.member ident <$> get
-    when declared . reportErrorWithPos pos $ funAlreadyDeclared ident
+    when declared . errorWithPos pos $ funAlreadyDeclared ident
     modify $ S.insert ident
     pure FunDef
         { funType  = AT.FunType retType argTypes
@@ -102,7 +103,7 @@ arg :: T.Arg Pos -> ErrorT Err (State ArgEnv) AT.Type
 arg (T.Arg pos typ (T.Ident ident)) = do
     typ <- annType typ
     declared <- M.member ident . scope <$> get
-    when declared . reportErrorWithPos pos $ argAlreadyDeclared ident
+    when declared . errorWithPos pos $ argAlreadyDeclared ident
     modify $ \e@ArgEnv{..} -> e
         { args'   = M.insert nextArg (AT.ArgInfo nextArg $ AT.VarInfo ident typ) args'
         , scope   = M.insert ident nextArg scope

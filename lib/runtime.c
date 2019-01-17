@@ -44,3 +44,7 @@ char* _concat(const char* s1, const char* s2) {
     char* t = malloc(strlen(s1)+strlen(s2)+1);
     return strcat(strcpy(t, s1), s2);
 }
+
+char* _new(int n) {
+    return malloc(4*(n+1));
+}

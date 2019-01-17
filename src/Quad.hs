@@ -8,6 +8,7 @@ data TopDef = FunDef Bool String [Var] [Quad]
 
 data Quad
     = Assign Var Exp
+    | Store Ptr Arg
     | Jump Label
     | Mark Label
     | CondJump Arg RelOp Arg Label
@@ -19,9 +20,13 @@ data Exp
     | Load Label
     | Val Arg
     | Call Fun [Arg]
+    | LoadPtr Ptr
     deriving (Eq, Ord)
 
 type Var = String
+
+data Ptr = Ptr Var Arg
+    deriving (Eq, Ord)
 
 data Arg
     = ConstI Integer

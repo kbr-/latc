@@ -10,7 +10,8 @@ import Data.Functor.Identity
 import Data.Foldable
 import Data.Maybe
 import Data.Monoid
-import Control.Lens
+import Data.List
+import Control.Lens hiding (assign)
 import Control.Monad.RWS.Strict
 import Control.Monad.State.Strict
 import Control.Exception.Base
@@ -39,13 +40,16 @@ type Gen = RWS GenEnv [Quad] GenSt
 makeLenses ''ProgSt
 makeLenses ''GenSt
 
-getVar :: T.LVal -> Gen String
-getVar (T.LVal x) = do
-    var <- reader $ M.lookup x . locals
-    assert (isJust var) $ case var of
-        (Just (T.VarInfo ident _)) -> pure $ ident <> show x
+getVar :: T.VarId -> Gen Var
+getVar = fmap fst . getVar'
 
-newTemp :: Gen String
+getVar' :: T.VarId -> Gen (Var, T.Type)
+getVar' x = do
+    var <- reader $ M.lookup x . locals
+    assert (isJust var) $ pure $ case var of
+        (Just (T.VarInfo ident typ)) -> (ident <> show x, typ)
+
+newTemp :: Gen Var
 newTemp = ("t" <>) . show <$> (temps <<+= 1)
 
 newLabel :: Gen Label
@@ -95,14 +99,15 @@ stmt T.Empty = pure ()
 stmt (T.BStmt xs) = traverse_ stmt xs
 
 stmt (T.Decl typ xs) = for_ xs $ \case
-    T.NoInit v -> Assign <$> getVar v <*> def >>= emit
-    T.Init v e -> Assign <$> getVar v <*> expr e >>= emit
+    T.NoInit v -> assign (T.Var v) def
+    T.Init v e -> assign (T.Var v) e
   where
     def = case typ of
-        T.Str -> Load <$> getString "\"\""
-        _     -> pure $ Val $ ConstI 0
+        T.Str     -> T.EString "\"\""
+        T.Arr typ -> T.ENew typ $ T.ELitInt 0
+        _         -> T.ELitInt 0
 
-stmt (T.Ass v e) = Assign <$> getVar v <*> expr e >>= emit
+stmt (T.Ass v e) = assign v e
 
 stmt (T.Incr v) = getVar v >>= \v -> emit $ Assign v $ BinInt (Var v) Plus (ConstI 1)
 
@@ -145,7 +150,36 @@ stmt (T.While e s) = do
     emit $ Mark lCond
     jumpIfTrue e lBody
 
+stmt (T.ForEach x a s) = do
+    x <- getVar x
+    a <- getVar a
+    [i, t, n] <- replicateM 3 newTemp
+    traverse emit
+        [ Assign i $ Val $ ConstI 0
+        , Assign t $ LoadPtr $ Ptr a $ ConstI 0
+        , Assign n $ BinInt (Var t) Times $ ConstI 4
+        ]
+    lCond <- newLabel
+    lBody <- newLabel
+    traverse emit
+        [ Jump lCond
+        , Mark lBody
+        , Assign i $ BinInt (Var i) Plus $ ConstI 4
+        , Assign x $ LoadPtr $ Ptr a $ Var i
+        ]
+    stmt s
+    emit $ Mark lCond
+    emit $ CondJump (Var i) LT (Var n) lBody
+
 stmt (T.SExp e) = Exp <$> expr e >>= emit
+
+assign :: T.LVal -> T.Expr -> Gen ()
+assign lv e = emit =<< case lv of
+    T.Var v -> Assign <$> getVar v <*> expr e
+    T.ArrElem v e -> Store <$> (Ptr <$> getVar v <*> arrayIndex e) <*> argExpr e
+    T.Attr v a -> do
+        (v, typ) <- getVar' v
+        Store <$> attr a v typ <*> argExpr e
 
 jumpIfFalse :: T.Expr -> Label -> Gen ()
 jumpIfFalse e l = case e of
@@ -190,9 +224,41 @@ argExpr e = expr e >>= \case
     Val a -> pure a
     e     -> Var <$> expTemp e
 
+arrayIndex :: T.Expr -> Gen Arg
+arrayIndex e = do
+    t <- argExpr e
+    ix <- newTemp
+    r <- newTemp
+    emit $ Assign ix $ BinInt t Plus (ConstI 1) -- index 0 holds length of the array
+    emit $ Assign r $ BinInt (Var ix) Times (ConstI 4)
+    pure $ Var r
+
+attr :: T.Attr -> Var -> T.Type -> Gen Ptr
+attr a v typ = case a of
+    T.ALeaf i -> pure $ Ptr v $ ConstI $ structIndex typ i
+    T.AArr i e -> do
+        t <- newTemp
+        emit $ Assign t $ LoadPtr  $ Ptr v $ ConstI $ structIndex typ i
+        Ptr t <$> arrayIndex e
+    T.AStruct i a -> do
+        t <- newTemp
+        emit $ Assign t $ LoadPtr  $ Ptr v $ ConstI $ structIndex typ i
+        attr a t $ structType typ i
+  where
+    structIndex (T.Arr _) i = assert (i == "length") 0
+    structIndex (T.Struct ms) i =
+        let ix = findIndex ((== i) . fst) ms
+         in assert (isJust ix) $ fromIntegral $ 4 * fromJust ix
+
+    structType (T.Struct ms) i =
+        let t = lookup i ms in assert (isJust t) $ fromJust t
+
 expr :: T.Expr -> Gen Exp
 
-expr (T.EVar v) = Val . Var <$> getVar v
+expr (T.EVar lv) = case lv of
+    T.Var v       -> Val . Var <$> getVar v
+    T.ArrElem v e -> LoadPtr <$> (Ptr <$> getVar v <*> arrayIndex e)
+    T.Attr v a    -> getVar' v >>= fmap LoadPtr . uncurry (attr a)
 
 expr (T.ELitInt x) = pure . Val $ ConstI x
 
@@ -201,6 +267,8 @@ expr T.ELitTrue = pure . Val $ ConstI 1
 expr T.ELitFalse = pure . Val $ ConstI 0
 
 expr (T.EApp f es) = Call f <$> traverse argExpr es
+
+expr (T.ENew _ e) = Call "_new" <$> sequence [argExpr e]
 
 expr (T.EString x) = Load <$> getString x
 

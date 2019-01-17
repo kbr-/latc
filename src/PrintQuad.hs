@@ -24,6 +24,7 @@ pQ = \case
 printQuad :: Quad -> String
 printQuad = \case
     Assign v e          -> v <> " = " <> printExp e
+    Store e v           -> printPtr e <> " = " <> printArg v
     Jump l              -> "goto " <> name l
     Mark l              -> name l <> ":"
     CondJump a1 op a2 l -> "if " <> printArg a1 <> " " <> printRelOp op <> " " <> printArg a2 <> " goto " <> name l
@@ -35,6 +36,10 @@ printExp = \case
     Load l          -> "load " <> name l
     Call f as       -> f <> "(" <> (intercalate "," $ map printArg as) <> ")"
     Val a           -> printArg a
+    LoadPtr e       -> printPtr e
+
+printPtr :: Ptr -> String
+printPtr (Ptr v a) = v <> "[" <> printArg a <> "]"
 
 printArg :: Arg -> String
 printArg = \case
