@@ -161,7 +161,7 @@ absExpr = \case
     Op a op b | elem op [Plus, Minus] -> T.EAdd pos (absExpr a) (absAdd op) (absExpr b)
     Op a op b                         -> T.EMul pos (absExpr a) (absMul op) (absExpr b)
     Const x                           -> T.ELitInt pos $ fromIntegral x
-    Var (Name v)                      -> T.EVar pos (T.Ident v)
+    Var (Name v)                      -> T.EVar pos $ T.Var pos $ T.Ident v
     Fun f _                           -> T.EApp pos (T.Ident $ funAsmName f) []
   where
 
@@ -187,7 +187,7 @@ collectFuns = \case
 
 simpleProgram :: Expr -> [(FVar, Int)] -> T.Program Pos
 simpleProgram e vs = T.Program pos $
-    [ T.FnDef pos (T.Int pos) (T.Ident "main") [] $ T.Block pos $
+    [ T.FnDef pos (T.BType pos $ T.Int pos) (T.Ident "main") [] $ T.Block pos $
         map (uncurry define) (varsFor 0 vs) ++
         [ T.SExp pos $ T.EApp pos (T.Ident "printInt") [absExpr e]
         , T.Ret pos $ T.ELitInt pos 0
@@ -198,11 +198,11 @@ simpleProgram e vs = T.Program pos $
     varsFor f = map (first snd) . filter ((== f) . fst . fst)
 
     define :: Name -> Int -> T.Stmt Pos
-    define (Name v) x = T.Decl pos (T.Int pos) [T.Init pos (T.Ident v) $ T.ELitInt pos $ fromIntegral x]
+    define (Name v) x = T.Decl pos (T.BType pos $ T.Int pos) [T.Init pos (T.Ident v) $ T.ELitInt pos $ fromIntegral x]
 
     funDef :: Int -> Expr -> [T.TopDef Pos]
     funDef f e =
-        [ T.FnDef pos (T.Int pos) (T.Ident $ funAsmName f) [] $ T.Block pos $
+        [ T.FnDef pos (T.BType pos $ T.Int pos) (T.Ident $ funAsmName f) [] $ T.Block pos $
             map (uncurry define) (varsFor f vs) ++
             [ T.Ret pos $ absExpr e ]
         ] ++ concatMap (uncurry funDef) (collectFuns e)
