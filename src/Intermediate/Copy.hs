@@ -42,6 +42,7 @@ update q (Vars vs) = (q, ) $ Vars $ case q' of
 propQuad :: Vars -> Quad -> Quad
 propQuad vs = \case
     Assign v e        -> Assign v $ propExp vs e
+    Store p a         -> Store (propPtr vs p) (propArg vs a)
     CondJump a op b l -> CondJump (propArg vs a) op (propArg vs b) l
     Exp e             -> Exp $ propExp vs e
     q                 -> q
@@ -51,7 +52,11 @@ propExp vs = \case
     BinInt a op b -> BinInt (propArg vs a) op (propArg vs b)
     Val a         -> Val (propArg vs a)
     Call f as     -> Call f (map (propArg vs) as)
+    LoadPtr p     -> LoadPtr $ propPtr vs p
     e             -> e
+
+propPtr :: Vars -> Ptr -> Ptr
+propPtr vs (Ptr b i d) = Ptr b (propArg vs i) d
 
 propArg :: Vars -> Arg -> Arg
 propArg (Vars vs) (Var v) = maybe (Var v) Var $ vs ^. at v

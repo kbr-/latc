@@ -74,6 +74,7 @@ foldExp = \case
 propQuad :: Consts -> Quad -> Quad
 propQuad cs = \case
     Assign v e        -> Assign v $ propExp cs e
+    Store p a         -> Store (propPtr cs p) (propArg cs a)
     CondJump a op b l -> CondJump (propArg cs a) op (propArg cs b) l
     Exp e             -> Exp $ propExp cs e
     q                 -> q
@@ -83,7 +84,11 @@ propExp cs = \case
     BinInt a op b -> BinInt (propArg cs a) op (propArg cs b)
     Val a         -> Val (propArg cs a)
     Call f as     -> Call f (map (propArg cs) as)
+    LoadPtr p     -> LoadPtr $ propPtr cs p
     e             -> e
+
+propPtr :: Consts -> Ptr -> Ptr
+propPtr cs (Ptr b i d) = Ptr b (propArg cs i) d
 
 propArg :: Consts -> Arg -> Arg
 propArg (Consts cs) (Var v) = maybe (Var v) ConstI $ cs ^. at v

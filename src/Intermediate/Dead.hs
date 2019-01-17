@@ -37,10 +37,11 @@ dead q n = not $ case q of
 
 update :: Quad -> Needs -> Needs
 update q n = n & case q of
-    Assign v e           -> if needed v n || hasEffects e then need (vars e) else id . kill v
-    CondJump a _ b _     -> need $ vars' [a, b]
-    Exp e | hasEffects e -> need $ vars e
-    _                    -> id
+    Assign v e                       -> if needed v n || hasEffects e then need (vars e) else id . kill v
+    Store (Ptr b i _) a              -> need $ vars' [Var b, i, a]
+    CondJump a _ b _                 -> need $ vars' [a, b]
+    Exp e | hasEffects e             -> need $ vars e
+    _                                -> id
 
 needed :: Var -> Needs -> Bool
 needed = S.member

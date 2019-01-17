@@ -3,9 +3,6 @@ module Main where
 import System.Environment
 import System.Exit
 import System.FilePath
-import Control.Monad
-import Data.List
-import qualified Data.Map as M
 
 import Compile
 
