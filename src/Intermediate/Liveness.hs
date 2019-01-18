@@ -20,6 +20,7 @@ data Use = Use
     , _reachesEnd :: Bool
     , _passesCall :: Bool
     }
+    deriving Show
 
 type Uses = M.Map Var Use
 

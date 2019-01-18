@@ -169,13 +169,13 @@ block qs aliveBegin aliveEnd = do
     tell code
     put s
 
-deb :: Z ()
-deb = do
+deb :: Uses -> Z ()
+deb uses = do
    BlockSt{..} <- get
-   traceM $ "desc:\n" <> "loc:\n" <> show _loc <> "\nregVars:\n" <> show _regVars <> "\nmemVars:\n" <> show _memVars <> "\n"
+   traceM $ "desc:\n" <> "loc:\n" <> show _loc <> "\nregVars:\n" <> show _regVars <> "\nmemVars:\n" <> show _memVars <> "\nuses:\n" <> show uses <> "\n"
 
 quad :: Q.Quad -> Uses -> Z ()
-quad q uses = {- deb <* traceM ("quad: " ++ P.printQuad q) <* -}case q of
+quad q uses = {- (*>) (traceM ("quad: " ++ P.printQuad q)) $ flip (*>) (deb uses) $ -}case q of
     Q.Assign v (Q.Val (Q.Var v')) -> do
         when (alive alives v && not (v == v')) $ do
             remove v
@@ -305,7 +305,7 @@ expr e finalVar comment uses = case e of
             v <- locate a
             emitWithComment (pushl v) $ P.printArg a
         mapM_ (freeDesc alives) $ vars' as
-        mapM_ (spill alives) =<< filterM (dirtyReg alives) callerSaveRegs
+        forM_ callerSaveRegs $ \r -> whenM (dirtyReg alives r) $ spill alives r
         emit $ calll f
         when (not $ null as) $
             emit $ addl (con $ fromIntegral $ 4 * length as) (reg esp)
@@ -484,7 +484,9 @@ locate :: MonadState BlockSt m => Q.Arg -> m Arg
 locate (Q.ConstI i) = pure $ AConst i
 locate (Q.Var v) = getReg v >>= \case
     Just r -> pure $ reg r
-    _      -> getMems v >>= \m -> assert (not $ null m) $ pure $ mem $ head m
+    _      -> getMems v >>= \m -> case m of
+        m':_ -> pure $ mem m'
+        []   -> error $ "could not locate " ++ v
 
 dirtyVar :: MonadState BlockSt m => S.Set Q.Var -> Q.Var -> m Bool
 dirtyVar alives v = if not $ alive alives v then pure False else
