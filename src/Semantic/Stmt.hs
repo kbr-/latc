@@ -22,20 +22,24 @@ import Control.Monad.Trans.Maybe
 type ZS = ErrorT Err (State Env)
 
 data Env = Env
-    { funs :: M.Map String AT.FunType
+    { funs       :: M.Map AT.Ident AT.FunType
+    , structs    :: M.Map AT.Ident AT.Type
     , scopeStack :: [Scope]
-    , nextVarId :: Int
+    , nextVarId  :: Int
     , funRetType :: AT.Type
-    , locals :: M.Map AT.VarId AT.VarInfo
+    , locals     :: M.Map AT.VarId AT.VarInfo
     }
 
 data Scope = Scope
     { vars :: M.Map AT.Ident (AT.VarId, AT.Type)
     }
 
+instance HasTypes ZS where
+    getStructType s = M.lookup s . structs <$> get
+
 instance HasSyms ZS where
-    getVar v = M.lookup v . vars . head . scopeStack <$> get
-    getFun f = M.lookup f . funs <$> get
+    getVar v    = M.lookup v . vars . head . scopeStack <$> get
+    getFun f    = M.lookup f . funs <$> get
 
 runStmts :: Env -> [T.Stmt Pos] -> Either [Err] ([AT.Stmt], M.Map AT.VarId AT.VarInfo)
 runStmts env ss = case flip runState env . runErrorT . runAll . map stmt $ ss of

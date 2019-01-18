@@ -16,9 +16,9 @@ import Control.Monad
 import Control.Monad.Except
 import Control.Monad.Reader
 
-class HasSyms m where
-    getVar :: AT.Ident -> m (Maybe (AT.VarId, AT.Type))
-    getFun :: AT.Ident -> m (Maybe AT.FunType)
+class HasTypes m => HasSyms m where
+    getVar    :: AT.Ident -> m (Maybe (AT.VarId, AT.Type))
+    getFun    :: AT.Ident -> m (Maybe AT.FunType)
 
 findMemTyp :: (MonadReport Err m, HasSyms m) => Pos -> [(AT.Ident, AT.Type)] -> AT.Ident -> m AT.Type
 findMemTyp pos ms i = case lookup i ms of
@@ -45,7 +45,7 @@ attr pos strucTyp lv = case strucTyp of
     AT.Arr _ -> case lv of
         T.Var _ (T.Ident s) | s == "length" -> pure $ (AT.ALeaf s, AT.Int)
         _ -> errorWithPos pos $ illegalArrAttr
-    AT.Struct ms -> case lv of
+    AT.Struct _ ms -> case lv of
         T.Var pos (T.Ident s) -> do
             memTyp <- findMemTyp pos ms s
             pure (AT.ALeaf s, memTyp)
@@ -90,12 +90,24 @@ expr (T.EApp pos (T.Ident str) es) = do
     unless (argTypes == ts) $ errorWithPos pos $ argTypeMismatch argTypes ts
     pure (AT.EApp str (map fst aes), retType)
 
-expr (T.ENew pos typ e) = do
+expr (T.ENewArr pos typ e) = do
     (e, lenTyp) <- expr e
     unless (lenTyp == AT.Int) $
         errorWithPos pos $ arrLengthMustBeInt lenTyp
     let typ' = annBType typ
-    pure $ (AT.ENew typ' e, AT.Arr typ')
+    pure (AT.ENewArr e, AT.Arr typ')
+
+expr (T.ENewStruc pos (T.Ident i)) = do
+    typ@(AT.Struct _ ms) <- getStructType i >>= \case
+        Just t  -> pure t
+        Nothing -> errorWithPos pos $ unknownType i
+    pure (AT.ENewStruct $ fromIntegral $ length ms, typ)
+
+expr (T.ENull pos (T.Ident i)) = do
+    typ <- getStructType i >>= \case
+        Just t  -> pure t
+        Nothing -> errorWithPos pos $ unknownType i
+    pure (AT.ENull, typ)
 
 expr (T.EString _ str) =
     pure (AT.EString str, AT.Str)

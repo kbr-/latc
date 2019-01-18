@@ -1,5 +1,9 @@
+{-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE FlexibleContexts #-}
 module Semantic.Program where
 
 import qualified Annotated as AT
@@ -12,13 +16,14 @@ import Semantic.Common
 import Data.Functor.Identity
 import Data.Maybe
 import Data.Monoid
+import Data.Either
+import Control.Lens
+import Control.Arrow
 import Control.Monad
 import Control.Monad.Except
+import Control.Monad.Reader
 import Control.Monad.State.Strict
 import Control.Monad.Trans.Maybe
-
-runProgram :: T.Program Pos -> Either [Err] AT.Program
-runProgram = runIdentity . runErrorT . program
 
 predefFuns :: M.Map AT.Ident AT.FunType
 predefFuns = M.fromList
@@ -31,85 +36,141 @@ predefFuns = M.fromList
     ,("_new",        AT.FunType (AT.Arr AT.Int) [AT.Int])
     ]
 
-type ZP = ErrorT Err Identity
-
-program :: T.Program Pos -> ZP AT.Program
-program (T.Program _ defs) = do
-    defs <- fromErrors . runDecls $ defs
-    let funs = foldr (\FunDef{..} -> M.insert funIdent funType) predefFuns defs
-    runAll . map (def funs) $ defs
+type Z = ErrorT Err Identity
 
 data FunDef = FunDef
     { funType  :: AT.FunType
     , funIdent :: AT.Ident
     , funPos   :: Pos
     , args     :: M.Map AT.VarId AT.ArgInfo
-    , body     :: T.Block Pos
+    , body     :: [T.Stmt Pos]
     }
 
-def :: M.Map AT.Ident AT.FunType -> FunDef -> ZP AT.TopDef
-def funs FunDef{..} = do
-    (body, locals) <- fromErrors . SS.runStmts env . fromBlock $ body
+data StructDef = StructDef
+    { structIdent :: AT.Ident
+    , members     :: [(AT.Ident, T.Type Pos)]
+    }
+
+data Env = Env
+    { funs    :: M.Map AT.Ident AT.FunType
+    , structs :: M.Map AT.Ident AT.Type
+    }
+
+data ArgEnv = ArgEnv
+    { _args'    :: M.Map AT.VarId AT.ArgInfo
+    , _scope   :: M.Map AT.Ident AT.VarId
+    , _nextArg :: Int
+    }
+
+instance HasTypes (ReaderT (M.Map AT.Ident AT.Type) Z) where
+    getStructType i = reader $ M.lookup i
+
+makeLenses ''ArgEnv
+
+runProgram :: T.Program Pos -> Either [Err] AT.Program
+runProgram = runIdentity . runErrorT . program
+
+program :: T.Program Pos -> Z AT.Program
+program (T.Program _ defs) = do
+    structDefs <- collectStructs defs
+    structs <- processStructs structDefs
+    funDefs <- runReaderT (collectFuns defs) structs
+    let funs = foldr (\FunDef{..} -> M.insert funIdent funType) predefFuns funDefs
+    runAll . map (funDef Env{..}) $ funDefs
+
+funDef :: Env -> FunDef -> Z AT.TopDef
+funDef Env{..} FunDef{..} = do
+    (body, locals) <- fromErrors . SS.runStmts env $ body
     when (funRetType /= AT.Void && not (alwaysReturn body)) $
         errorWithPos funPos $ mustReturn funIdent
     pure AT.FunDef{..}
   where
     env = SS.Env
-        { funs = funs
+        { funs       = funs
+        , structs    = structs
         , scopeStack = [SS.Scope { vars = M.foldrWithKey insertArgVar M.empty args }]
-        , nextVarId = (+1) . foldr max (-1) . M.keys $ args
+        , nextVarId  = (+1) . foldr max (-1) . M.keys $ args
         , funRetType = funRetType
-        , locals = fmap (\(AT.ArgInfo _ v) -> v) args
+        , locals     = fmap (\(AT.ArgInfo _ v) -> v) args
         }
 
     funRetType = case funType of (AT.FunType typ _) -> typ
     insertArgVar varId (AT.ArgInfo _ (AT.VarInfo ident typ)) = M.insert ident (varId, typ)
-    fromBlock (T.Block _ b) = b
 
-runDecls :: [T.TopDef Pos] -> Either [Err] [FunDef]
-runDecls = flip evalState (M.keysSet predefFuns) . runErrorT . runAll . map decl
-
-type ZD = ErrorT Err (State (S.Set AT.Ident))
-
-decl :: T.TopDef Pos -> ZD FunDef
-decl (T.FnDef pos typ (T.Ident ident) args body) = do
-    retType <- annRetType typ
-    (argTypes, args) <- fromErrors . runArgs $ args
-    declared <- S.member ident <$> get
-    when declared . errorWithPos pos $ funAlreadyDeclared ident
-    modify $ S.insert ident
-    pure FunDef
-        { funType  = AT.FunType retType argTypes
-        , funIdent = ident
-        , funPos   = pos
-        , args     = args
-        , body     = body
-        }
-
-runArgs :: [T.Arg Pos] -> Either [Err] ([AT.Type], M.Map AT.VarId AT.ArgInfo)
-runArgs as = case flip runState env . runErrorT . runAll . map arg $ as of
-    (Left errs, _)            -> throwError errs
-    (Right types, ArgEnv{..}) -> pure (types, args')
+collectStructs :: MonadReport Err m => [T.TopDef Pos] -> m [StructDef]
+collectStructs xs = fmap catMaybes $ flip unwrap (flip evalState S.empty) $ runAll $ map collectStruct xs
   where
-    env = ArgEnv { args' = M.empty, scope = M.empty, nextArg = 0 }
+    collectStruct :: T.TopDef Pos -> ErrorT Err (State (S.Set AT.Ident)) (Maybe StructDef)
+    collectStruct (T.FnDef _ _ _ _ _) = pure Nothing
+    collectStruct (T.StructDef pos (T.Ident i) ms) = do
+        declared <- S.member i <$> get
+        when declared $
+            errorWithPos pos $ structAlreadyDeclared i
+        modify $ S.insert i
+        ms <- collectMembers ms
+        pure $ Just StructDef
+            { structIdent = i
+            , members = ms
+            }
 
-data ArgEnv = ArgEnv
-    { args'   :: M.Map AT.VarId AT.ArgInfo
-    , scope   :: M.Map AT.Ident AT.VarId
-    , nextArg :: Int
-    }
+collectMembers :: MonadReport Err m => [T.Member Pos] -> m [(AT.Ident, T.Type Pos)]
+collectMembers xs = flip evalStateT S.empty $ traverse collectMember xs
+  where
+    collectMember (T.Member pos typ (T.Ident i)) = do
+        declared <- S.member i <$> get
+        when declared $ errorWithPos pos $ memberAlreadyDeclared i
+        modify $ S.insert i
+        pure (i, typ)
 
-arg :: T.Arg Pos -> ErrorT Err (State ArgEnv) AT.Type
-arg (T.Arg pos typ (T.Ident ident)) = do
-    typ <- annType typ
-    declared <- M.member ident . scope <$> get
-    when declared . errorWithPos pos $ argAlreadyDeclared ident
-    modify $ \e@ArgEnv{..} -> e
-        { args'   = M.insert nextArg (AT.ArgInfo nextArg $ AT.VarInfo ident typ) args'
-        , scope   = M.insert ident nextArg scope
-        , nextArg = nextArg + 1
-        }
-    pure typ
+processStructs :: MonadReport Err m => [StructDef] -> m (M.Map AT.Ident AT.Type)
+processStructs xs = flip unwrap runIdentity (runAll (map (checkMembers . members) xs)) *> pure result
+  where
+    result = M.fromList result'
+    result' = map (\StructDef{..} -> (structIdent, AT.Struct structIdent $ map processMember members)) xs
+    processMember = second $ \case
+        T.SType _ (T.Ident i) -> result M.! i
+        T.BType _ typ         -> annBType typ
+        T.Arr _ typ           -> AT.Arr $ annBType typ
+    checkMembers = mapM_ checkMember
+    checkMember (_, typ) = case typ of
+        T.SType pos (T.Ident i) -> when (not $ S.member i idents) $ errorWithPos pos $ unknownType i
+        T.Void pos              -> errorWithPos pos $ invalidType "void"
+        _                       -> pure ()
+    idents = S.fromList $ map structIdent xs
+
+collectFuns :: (MonadReport Err m, HasTypes m) => [T.TopDef Pos] -> m [FunDef]
+collectFuns xs = fmap catMaybes $ flip unwrap' (flip evalStateT S.empty) $ runAll $ map collectFun xs
+  where
+    collectFun (T.StructDef _ _ _) = pure Nothing
+    collectFun (T.FnDef pos typ (T.Ident i) args (T.Block _ body)) = do
+        retType <- lift . lift $ annRetType typ
+        (argTypes, args) <- lift . lift $ runArgs args
+        declared <- S.member i <$> get
+        when declared $ errorWithPos pos $ funAlreadyDeclared i
+        modify $ S.insert i
+        pure $ Just FunDef
+            { funType  = AT.FunType retType argTypes
+            , funIdent = i
+            , funPos   = pos
+            , args     = args
+            , body     = body
+            }
+
+runArgs :: (HasTypes m, MonadReport Err m) => [T.Arg Pos] -> m ([AT.Type], M.Map AT.VarId AT.ArgInfo)
+runArgs as = fmap (second _args') $ flip runStateT env $ traverse runArg $ as
+  where
+    runArg (T.Arg pos typ (T.Ident i)) = do
+        typ <- lift $ annType typ
+        declared <- use $ scope . to (M.member i)
+        when declared $ errorWithPos pos $ argAlreadyDeclared i
+
+        currArg <- nextArg <<+= 1
+        args' . at currArg ?= AT.ArgInfo currArg (AT.VarInfo i typ)
+        scope . at i ?= currArg
+
+        pure typ
+
+    env = ArgEnv M.empty M.empty 0
 
 alwaysReturn :: [AT.Stmt] -> Bool
 alwaysReturn = foldr ((||) . alwaysReturns) False
@@ -203,6 +264,14 @@ funAlreadyDeclared ident =
     "Function already declared: " <> ident <>
     if elem ident (map fst . M.toList $ predefFuns) then " (builtin function)" else ""
 
+structAlreadyDeclared :: AT.Ident -> Err
+structAlreadyDeclared  i =
+    "Structure already declared: " <> i
+
 mustReturn :: AT.Ident -> Err
 mustReturn ident =
     "Could not deduce that function " <> ident <> " always returns"
+
+memberAlreadyDeclared :: AT.Ident -> Err
+memberAlreadyDeclared i =
+    "Member already declared: " <> i

@@ -50,3 +50,7 @@ char* _new(int n) {
     ((int*)r)[0] = n;
     return r;
 }
+
+char* _newStruct(int size) {
+    return malloc(4*size);
+}

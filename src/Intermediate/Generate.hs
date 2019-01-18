@@ -103,9 +103,10 @@ stmt (T.Decl typ xs) = for_ xs $ \case
     T.Init v e -> assign (T.Var v) e
   where
     def = case typ of
-        T.Str     -> T.EString "\"\""
-        T.Arr typ -> T.ENew typ $ T.ELitInt 0
-        _         -> T.ELitInt 0
+        T.Str        -> T.EString "\"\""
+        T.Arr typ    -> T.ENewArr $ T.ELitInt 0
+        T.Struct _ _ -> T.ENull
+        _            -> T.ELitInt 0
 
 stmt (T.Ass v e) = assign v e
 
@@ -236,11 +237,11 @@ attr a v typ = case a of
         attr a t $ structType typ i
   where
     structIndex (T.Arr _) i = assert (i == "length") 0
-    structIndex (T.Struct ms) i =
+    structIndex (T.Struct _ ms) i =
         let ix = findIndex ((== i) . fst) ms
          in assert (isJust ix) $ fromIntegral $ fromJust ix
 
-    structType (T.Struct ms) i =
+    structType (T.Struct _ ms) i =
         let t = lookup i ms in assert (isJust t) $ fromJust t
 
 expr :: T.Expr -> Gen Exp
@@ -258,7 +259,11 @@ expr T.ELitFalse = pure . Val $ ConstI 0
 
 expr (T.EApp f es) = Call f <$> traverse argExpr es
 
-expr (T.ENew _ e) = Call "_new" <$> sequence [argExpr e]
+expr (T.ENewArr e) = Call "_new" <$> sequence [argExpr e]
+
+expr (T.ENewStruct s) = pure $ Call "_newStruct" [ConstI s]
+
+expr T.ENull = pure . Val $ ConstI 0
 
 expr (T.EString x) = Load <$> getString x
 

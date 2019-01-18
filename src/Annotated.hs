@@ -40,8 +40,17 @@ data Stmt
 
 data Item = NoInit VarId | Init VarId Expr
 
-data Type = Int | Str | Bool | Void | Arr Type | Struct [(Ident, Type)]
-    deriving (Eq, Show)
+data Type = Int | Str | Bool | Void | Arr Type | Struct Ident [(Ident, Type)]
+    deriving Show
+
+instance Eq Type where
+ Int == Int = True
+ Str == Str = True
+ Bool == Bool = True
+ Void == Void = True
+ Arr t == Arr t' | t == t' = True
+ Struct i _ == Struct i' _ | i == i' = True
+ _ == _ = False
 
 data FunType = FunType Type [Type]
 
@@ -51,7 +60,9 @@ data Expr
     | ELitTrue
     | ELitFalse
     | EApp Ident [Expr]
-    | ENew Type Expr
+    | ENewArr Expr
+    | ENewStruct Integer
+    | ENull
     | EString String
     | Neg Expr
     | Not Expr

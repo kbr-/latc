@@ -10,6 +10,7 @@ module Semantic.ErrorT where
 import Control.Monad.State.Strict
 import Control.Monad.Trans.Maybe
 import Control.Monad.Except
+import Control.Monad.Reader
 import Control.Arrow
 
 newtype ErrorT e m a = ErrorT (MaybeT (StateT [e] m) a)
@@ -23,11 +24,27 @@ instance MonadState s m => MonadState s (ErrorT e m) where
     put = lift . put
     state = lift . state
 
+instance MonadReader r m => MonadReader r (ErrorT e m) where
+    ask = lift ask
+    local = mapErrorT . local
+    reader = lift . reader
+
 class Monad m => MonadReport e m | m -> e where
-    reportError :: e -> m a
+    reportErrors :: [e] -> m a
 
 instance Monad m => MonadReport e (ErrorT e m) where
-    reportError e = reportErrors [e]
+    reportErrors e = ErrorT $ mapM (modify . (:)) e *> fail ""
+
+instance MonadReport e m => MonadReport e (StateT s m) where
+    reportErrors = lift . reportErrors
+
+instance MonadReport e m => MonadReport e (ReaderT r m) where
+    reportErrors = lift . reportErrors
+
+reportError :: MonadReport e m => e -> m a
+reportError = reportErrors . pure
+
+mapErrorT f (ErrorT m) = ErrorT $ mapMaybeT f m
 
 runErrorT :: Functor m => ErrorT e m a -> m (Either [e] a)
 runErrorT (ErrorT m) = fmap mkEither . flip runStateT [] . runMaybeT $ m
@@ -42,12 +59,15 @@ run2 :: Monad m => ErrorT e m a -> ErrorT e m b -> ErrorT e m (a, b)
 run2 (ErrorT ma) (ErrorT mb) = ErrorT . MaybeT $
     runMaybeT ma >>= \a -> runMaybeT mb >>= \b -> pure $ (,) <$> a <*> b
 
-fromError :: Monad m => Either e a -> ErrorT e m a
+fromError :: MonadReport e m => Either e a -> m a
 fromError = fromErrors . left pure
 
-fromErrors :: Monad m => Either [e] a -> ErrorT e m a
+fromErrors :: MonadReport e m => Either [e] a -> m a
 fromErrors (Left e)  = reportErrors e
 fromErrors (Right x) = pure x
 
-reportErrors :: Monad m => [e] -> ErrorT e m a
-reportErrors e = ErrorT $ mapM (modify . (:)) e *> fail ""
+unwrap :: (Monad m, MonadReport e n) => ErrorT e m a -> (m (Either [e] a) -> Either [e] a) -> n a
+unwrap m f = fromErrors $ f (runErrorT m)
+
+unwrap' :: (Monad m, MonadReport e n) => ErrorT e m a -> (m (Either [e] a) -> n (Either [e] a)) -> n a
+unwrap' m f = join $ fromErrors <$> f (runErrorT m)

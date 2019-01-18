@@ -6,11 +6,17 @@ Program.   Program ::= [TopDef] ;
 
 FnDef.	   TopDef ::= Type Ident "(" [Arg] ")" Block ;
 
+StructDef. TopDef ::= "class" Ident "{" [Member] "}" ;
+
 separator nonempty TopDef "" ;
 
 Arg. 	   Arg ::= Type Ident;
 
 separator  Arg "," ;
+
+Member.    Member ::= Type Ident;
+
+separator  Member ";" ;
 
 -- statements ----------------------------------------------
 
@@ -64,6 +70,8 @@ Void.      Type ::= "void" ;
 
 Arr.       Type ::= BType "[]" ;
 
+SType.     Type ::= Ident ;
+
 separator  Type "," ;
 
 -- Expressions ---------------------------------------------
@@ -78,7 +86,11 @@ ELitFalse. Expr6 ::= "false" ;
 
 EApp.      Expr6 ::= Ident "(" [Expr] ")" ;
 
-ENew.      Expr6 ::= "new" BType "[" Expr "]" ;
+ENewArr.   Expr6 ::= "new" BType "[" Expr "]" ;
+
+ENewStruc. Expr6 ::= "new" Ident ;
+
+ENull.     Expr6 ::= "(" Ident ")" "null" ;
 
 EString.   Expr6 ::= String ;
 
